@@ -63,7 +63,7 @@ export async function POST(request) {
       status: "active",
       isMobileAllowed: role === "super_admin" || role === "admin",
       forcePasswordChange: true,
-      leaveBalance: { Paid: 0, Sick: 0 },
+      leaveBalance: { Paid: 24, Sick: 0 },
       createdAt: now,
       updatedAt: now,
     });
