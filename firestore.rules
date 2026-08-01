@@ -1,0 +1,77 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function myRole() {
+      return isSignedIn() ? myProfile().role : null;
+    }
+
+    function isAdmin() {
+      return myRole() in ['super_admin', 'admin'];
+    }
+
+    function isHR() {
+      return myRole() in ['super_admin', 'admin', 'hr'];
+    }
+
+    // --- users (employee profiles) ---
+    // Client SDK only reads/updates here directly; creation/deletion of the
+    // Auth user + profile happens via your admin-SDK API routes, which bypass
+    // these rules entirely (server uses the Admin SDK, not the client SDK).
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      // Employees can update a few of their own fields (e.g. lastLoginAt
+      // gets touched on login); HR/Admin can update anyone.
+      allow update: if isHR() || (isSignedIn() && request.auth.uid == uid);
+      allow create, delete: if false; // only via Admin SDK (API routes)
+    }
+
+    // --- attendance --- (doc id pattern: {employeeUid}_{date})
+    match /attendance/{docId} {
+      // Single-doc reads (e.g. "do I have a record for today") can happen
+      // before the doc exists, so we check the doc id instead of resource.data.
+      allow get: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      // Collection queries (e.g. own attendance history) always return
+      // existing docs, so resource.data-based filtering works fine here.
+      allow list: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid && docId.split('_')[0] == request.auth.uid;
+      allow update: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // --- leaveRequests --- (random auto-ids, always created via addDoc so no pre-existence read needed)
+    match /leaveRequests/{docId} {
+      allow read: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid;
+      // Employees can update their own pending request (e.g. cancel);
+      // HR/Admin can approve/reject any request.
+      allow update: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // --- devices --- (doc id pattern: {employeeUid}_{fingerprint})
+    match /devices/{docId} {
+      allow get: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      allow list: if isHR();
+      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid && docId.split('_')[0] == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // --- Everything else (leads, projects, quotations, notifications,
+    // compOffRequests, editorTeams, etc.) is inactive in v1 — locked down
+    // until those modules are turned back on. ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
