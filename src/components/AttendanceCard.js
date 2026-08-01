@@ -193,7 +193,7 @@ export default function AttendanceCard() {
               </Button>
               {!hasReport && (
                 <p className="w-full text-xs text-amber-600">
-                  Submit today&apos;s Daily Report (below) before you can check out.
+                  Submit today&apos;s Daily Report before you can check out.
                 </p>
               )}
             </>
