@@ -13,7 +13,7 @@ export const metadata = {
   title: "The Rolling Stories | Staff Portal",
   description: "Attendance & Leave Management — The Rolling Stories",
   icons: {
-    icon: "/logo.png",
+    icon: "/logo-light.png",
   },
 };
 

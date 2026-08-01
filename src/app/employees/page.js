@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -64,6 +64,10 @@ function EmployeesContent() {
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [search, setSearch] = useState("");
+    const [deptFilter, setDeptFilter] = useState("all");
+    const [roleFilter, setRoleFilter] = useState("all");
+    const [statusFilter, setStatusFilter] = useState("all");
     const [form, setForm] = useState({
         name: "",
         email: "",
@@ -249,6 +253,21 @@ function EmployeesContent() {
         }
     }
 
+    const filteredEmployees = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        return employees.filter((emp) => {
+            if (deptFilter !== "all" && emp.department !== deptFilter) return false;
+            if (roleFilter !== "all" && emp.role !== roleFilter) return false;
+            if (statusFilter !== "all" && emp.status !== statusFilter) return false;
+            if (!q) return true;
+            return (
+                emp.name?.toLowerCase().includes(q) ||
+                emp.email?.toLowerCase().includes(q) ||
+                emp.phone?.toLowerCase().includes(q)
+            );
+        });
+    }, [employees, search, deptFilter, roleFilter, statusFilter]);
+
     return (
         <AppShell>
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -320,11 +339,68 @@ function EmployeesContent() {
                 </div>
             </div>
 
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <Input
+                    placeholder="Search by name, email, or phone..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="w-full sm:w-64"
+                />
+                <div className="grid grid-cols-3 gap-2 sm:flex sm:w-auto">
+                    <Select value={deptFilter} onValueChange={setDeptFilter}>
+                        <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Department" /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All departments</SelectItem>
+                            {DEPARTMENTS.map((dept) => (
+                                <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <Select value={roleFilter} onValueChange={setRoleFilter}>
+                        <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Role" /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All roles</SelectItem>
+                            {Object.values(ROLES).map((role) => (
+                                <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <SelectTrigger className="w-full sm:w-32"><SelectValue placeholder="Status" /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All statuses</SelectItem>
+                            <SelectItem value="active">Active</SelectItem>
+                            <SelectItem value="inactive">Inactive</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                {(search || deptFilter !== "all" || roleFilter !== "all" || statusFilter !== "all") && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-fit"
+                        onClick={() => {
+                            setSearch("");
+                            setDeptFilter("all");
+                            setRoleFilter("all");
+                            setStatusFilter("all");
+                        }}
+                    >
+                        Clear filters
+                    </Button>
+                )}
+            </div>
+
             {loading ? (
                 <p className="text-sm text-slate-500">Loading employees...</p>
+            ) : filteredEmployees.length === 0 ? (
+                <p className="text-sm text-slate-500">No employees match your search/filters.</p>
             ) : (
                 <div className="grid gap-3">
-                    {employees.map((emp) => (
+                    <p className="text-xs text-slate-400">
+                        Showing {filteredEmployees.length} of {employees.length} employees
+                    </p>
+                    {filteredEmployees.map((emp) => (
                         <Card key={emp.uid}>
                             <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="flex items-center gap-3">
