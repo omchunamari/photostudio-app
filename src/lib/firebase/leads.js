@@ -5,6 +5,7 @@ import {
   getDocs,
   addDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   orderBy,
@@ -55,6 +56,10 @@ export async function updateLeadStatus(id, status) {
     status,
     updatedAt: new Date().toISOString(),
   });
+}
+
+export async function deleteLead(id) {
+  await deleteDoc(doc(db, "leads", id));
 }
 
 export async function getLeadsByStatus(status) {

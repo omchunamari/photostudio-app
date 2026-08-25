@@ -12,6 +12,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import StatusBadge from "@/components/ui/status-badge";
 import { ArrowLeft } from "lucide-react";
 
+const HIDDEN_ROLES = ["super_admin", "admin"];
+
 function formatEventDate(ev) {
   if (!ev.eventStartDate) return "No date set";
   if (!ev.eventEndDate || ev.eventEndDate === ev.eventStartDate) return ev.eventStartDate;
@@ -27,12 +29,20 @@ function MyProjectDetailContent() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (HIDDEN_ROLES.includes(user.role)) {
+      router.replace("/dashboard");
+      return;
+    }
     getEventsForEmployee(user.uid)
       .then((all) => {
         setEvents(all.filter((ev) => ev.projectId === projectId));
       })
       .finally(() => setLoading(false));
-  }, [user.uid, projectId]);
+  }, [user.uid, user.role, projectId, router]);
+
+  if (HIDDEN_ROLES.includes(user.role)) {
+    return null;
+  }
 
   if (loading) {
     return (

@@ -15,11 +15,11 @@ import {
   getConflictingEvents,
   getAllStatusUpdatesForEvent,
 } from "@/lib/firebase/events";
+import { getProjectById } from "@/lib/firebase/projects";
 import { getAllEmployees } from "@/lib/firebase/employees";
-import { getAllEditorTeams } from "@/lib/firebase/editorTeams";
+import { getAllFreelancers } from "@/lib/firebase/freelancers";
 import { notifyEmployee } from "@/lib/firebase/notifications";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
-import AssignEditorTeamButton from "@/components/AssignEditorTeamButton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,21 +48,27 @@ import { toast } from "sonner";
 import { ArrowLeft, AlertTriangle, X, Trash2, Users2 } from "lucide-react";
 
 const SHOOT_ROLES = ["photographer", "videographer", "editor", "data_manager"];
+const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 function EventDetailContent() {
   const { id: projectId, eventId } = useParams();
   const router = useRouter();
   const { user } = useAuth();
+  const isAdminOrPM = ADMIN_ROLES.includes(user.role);
   const canDelete = ["super_admin", "admin"].includes(user.role);
 
   const [event, setEvent] = useState(null);
   const [employees, setEmployees] = useState([]);
+  const [freelancers, setFreelancers] = useState([]);
   const [editorTeamsById, setEditorTeamsById] = useState({}); // teamId -> name, for the "via <team>" badge
   const [loading, setLoading] = useState(true);
   const [conflictMap, setConflictMap] = useState({});
   const [statusUpdates, setStatusUpdates] = useState([]);
-  const [selectedUid, setSelectedUid] = useState("");
+  // Combined picker value is "employee:{uid}" or "freelancer:{id}" so one
+  // Select can offer both pools without id collisions between them.
+  const [selectedKey, setSelectedKey] = useState("");
   const [assignNote, setAssignNote] = useState("");
+  const [assignDayRate, setAssignDayRate] = useState("");
   const [savingTeam, setSavingTeam] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -76,6 +82,17 @@ function EventDetailContent() {
   async function loadData() {
     setLoading(true);
     try {
+      // A Project Leader may only manage events under the project they
+      // lead. Check the parent project's leaderUid before showing anything.
+      if (!isAdminOrPM) {
+        const project = await getProjectById(projectId);
+        if (!project || project.leaderUid !== user.uid) {
+          toast.error("You don't have access to this project");
+          router.replace("/projects");
+          return;
+        }
+      }
+
       const ev = await getEventById(projectId, eventId);
       setEvent(ev);
       if (ev) {
@@ -87,23 +104,29 @@ function EventDetailContent() {
 
         try {
           const emps = await getAllEmployees();
-          setEmployees(emps.filter((e) => SHOOT_ROLES.includes(e.role)));
+          setEmployees(emps.filter((e) => SHOOT_ROLES.includes(e.role) && e.status === "active"));
         } catch (err) {
           toast.error(`Failed loading employees: ${err.message}`);
         }
 
         try {
-          const teams = await getAllEditorTeams();
-          setEditorTeamsById(Object.fromEntries(teams.map((t) => [t.id, t.name])));
+          const fls = await getAllFreelancers();
+          setFreelancers(fls.filter((f) => f.status === "active"));
         } catch (err) {
-          toast.error(`Failed loading editor teams: ${err.message}`);
+          toast.error(`Failed loading freelancers: ${err.message}`);
         }
 
-        try {
-          const conflicts = await getConflictingEvents(ev.eventStartDate, ev.eventEndDate, ev.id);
-          setConflictMap(conflicts);
-        } catch (err) {
-          toast.error(`Failed loading conflicts: ${err.message}`);
+        // Conflict-checking scans every project's events, which is
+        // intentionally admin/PM-only data (a Project Leader can't see
+        // other projects' schedules) — skip it for leaders rather than
+        // let it fail with a permission error.
+        if (isAdminOrPM) {
+          try {
+            const conflicts = await getConflictingEvents(ev.eventStartDate, ev.eventEndDate, ev.id);
+            setConflictMap(conflicts);
+          } catch (err) {
+            toast.error(`Failed loading conflicts: ${err.message}`);
+          }
         }
 
         try {
@@ -121,7 +144,25 @@ function EventDetailContent() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, eventId]);
+
+  // Prefill the per-assignment day rate with the freelancer's default rate
+  // whenever a freelancer is picked, so it's a one-click "use default" but
+  // still editable per assignment (e.g. a negotiated rate for this project).
+  useEffect(() => {
+    if (!selectedKey) {
+      setAssignDayRate("");
+      return;
+    }
+    const [kind, selId] = selectedKey.split(":");
+    if (kind === "freelancer") {
+      const fl = freelancers.find((f) => f.id === selId);
+      setAssignDayRate(fl?.dayRate ? String(fl.dayRate) : "");
+    } else {
+      setAssignDayRate("");
+    }
+  }, [selectedKey, freelancers]);
 
   async function handleSaveDetails(e) {
     e.preventDefault();
@@ -160,41 +201,68 @@ function EventDetailContent() {
   }
 
   async function handleAddMember() {
-    if (!selectedUid) {
-      toast.error("Select an employee");
+    if (!selectedKey) {
+      toast.error("Select an employee or freelancer");
       return;
     }
-    if (event.team?.some((m) => m.uid === selectedUid)) {
+    const [kind, id] = selectedKey.split(":");
+    if (event.team?.some((m) => m.uid === id)) {
       toast.error("Already assigned to this event");
       return;
     }
     setSavingTeam(true);
     try {
-      const emp = employees.find((e) => e.uid === selectedUid);
       const trimmedNote = assignNote.trim();
-      const newMember = {
-        uid: selectedUid,
-        name: emp.name,
-        role: emp.role,
-        sourceTeamId: null, // individually added, distinct from a bulk team-assign
-        assignments: trimmedNote
-          ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
-          : [],
-      };
+      let newMember;
+      if (kind === "freelancer") {
+        const fl = freelancers.find((f) => f.id === id);
+        newMember = {
+          uid: fl.id,
+          name: fl.name,
+          role: fl.skill,
+          type: "freelancer",
+          sourceTeamId: null,
+          // Per-assignment override of the freelancer's default day rate
+          // (e.g. a negotiated rate for this specific project) — this is
+          // what the Expenses payout suggestion uses, falling back to the
+          // freelancer's profile dayRate only if this wasn't set.
+          dayRate: Number(assignDayRate) || fl.dayRate || 0,
+          assignments: trimmedNote
+            ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
+            : [],
+        };
+      } else {
+        const emp = employees.find((e) => e.uid === id);
+        newMember = {
+          uid: emp.uid,
+          name: emp.name,
+          role: emp.role,
+          type: "employee",
+          sourceTeamId: null, // individually added, distinct from a bulk team-assign
+          assignments: trimmedNote
+            ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
+            : [],
+        };
+      }
       const newTeam = [...(event.team || []), newMember];
       await updateEventTeam(projectId, eventId, newTeam, event.status);
 
-      await notifyEmployee(selectedUid, {
-        type: "event_assignment",
-        title: `Assigned to ${event.eventName} (${event.projectName})`,
-        message: trimmedNote || "You've been added to this event's team.",
-        projectId,
-        eventId,
-      });
+      // Freelancers have no login account, so there's nothing to notify —
+      // only employees get an in-app notification.
+      if (kind === "employee") {
+        await notifyEmployee(id, {
+          type: "event_assignment",
+          title: `Assigned to ${event.eventName} (${event.projectName})`,
+          message: trimmedNote || "You've been added to this event's team.",
+          projectId,
+          eventId,
+        });
+      }
 
       toast.success("Team member added");
-      setSelectedUid("");
+      setSelectedKey("");
       setAssignNote("");
+      setAssignDayRate("");
       loadData();
     } catch (err) {
       toast.error(err.message);
@@ -245,8 +313,15 @@ function EventDetailContent() {
     );
   }
 
-  const selectedConflicts = selectedUid ? conflictMap[selectedUid] : null;
-  const selectedEmployee = employees.find((e) => e.uid === selectedUid);
+  const [selectedKind, selectedId] = selectedKey ? selectedKey.split(":") : [null, null];
+  const selectedConflicts = selectedId ? conflictMap[selectedId] : null;
+  const selectedEmployee = employees.find((e) => e.uid === selectedId);
+  const selectedFreelancer = freelancers.find((f) => f.id === selectedId);
+  const selectedLabel = selectedEmployee
+    ? `${selectedEmployee.name} (${selectedEmployee.role})`
+    : selectedFreelancer
+    ? `${selectedFreelancer.name} (${selectedFreelancer.skill}, freelancer)`
+    : null;
   const detailsShootDays =
     detailsForm.eventStartDate && detailsForm.eventEndDate
       ? Math.max(
@@ -369,35 +444,44 @@ function EventDetailContent() {
           <CardContent className="p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-medium text-slate-900">Team Assignment</h3>
-              <AssignEditorTeamButton
-                projectId={projectId}
-                eventId={eventId}
-                currentTeam={event.team}
-                currentStatus={event.status}
-                addedByName={user.name}
-                onAssigned={loadData}
-              />
             </div>
 
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="flex-1">
-                <Label>Employee</Label>
-                <Select value={selectedUid} onValueChange={setSelectedUid}>
+                <Label>Employee or Freelancer</Label>
+                <Select value={selectedKey} onValueChange={setSelectedKey}>
                   <SelectTrigger>
-                    {selectedEmployee
-                      ? `${selectedEmployee.name} (${selectedEmployee.role})`
-                      : <span className="text-slate-400">Select employee</span>}
+                    {selectedLabel || <span className="text-slate-400">Select employee or freelancer</span>}
                   </SelectTrigger>
                   <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.uid} value={e.uid}>
-                        {e.name} ({e.role})
-                      </SelectItem>
-                    ))}
+                    {employees.length > 0 && (
+                      <>
+                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                          Employees
+                        </p>
+                        {employees.map((e) => (
+                          <SelectItem key={`employee:${e.uid}`} value={`employee:${e.uid}`}>
+                            {e.name} ({e.role})
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                    {freelancers.length > 0 && (
+                      <>
+                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                          Freelancers
+                        </p>
+                        {freelancers.map((f) => (
+                          <SelectItem key={`freelancer:${f.id}`} value={`freelancer:${f.id}`}>
+                            {f.name} ({f.skill})
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
-              <Button onClick={handleAddMember} disabled={savingTeam || !selectedUid} className="w-full sm:w-auto">
+              <Button onClick={handleAddMember} disabled={savingTeam || !selectedKey} className="w-full sm:w-auto">
                 Add
               </Button>
             </div>
@@ -412,6 +496,24 @@ function EventDetailContent() {
                 rows={2}
               />
             </div>
+
+            {selectedKind === "freelancer" && (
+              <div className="mb-3 max-w-[200px]">
+                <Label htmlFor="assignDayRate">Day rate for this assignment (₹)</Label>
+                <Input
+                  id="assignDayRate"
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 3000"
+                  value={assignDayRate}
+                  onChange={(e) => setAssignDayRate(e.target.value)}
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Defaults to their profile rate — override here for a project-specific rate.
+                  This is what the Expenses payout suggestion will use.
+                </p>
+              </div>
+            )}
 
             {selectedConflicts?.length > 0 && (
               <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
@@ -439,6 +541,16 @@ function EventDetailContent() {
                         <span className="flex min-w-0 items-center gap-1.5 truncate">
                           {m.name}
                            {/* — <span className="text-slate-500">{m.role}</span> */}
+                          {m.type === "freelancer" && (
+                            <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600">
+                              Freelancer
+                            </span>
+                          )}
+                          {m.type === "freelancer" && m.dayRate > 0 && (
+                            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                              ₹{m.dayRate.toLocaleString("en-IN")}/day
+                            </span>
+                          )}
                           {m.sourceTeamId ? (
                             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
                               <Users2 className="h-3 w-3" /> {teamName || "Team"}
@@ -517,7 +629,7 @@ function EventDetailContent() {
 
 export default function EventDetailPage() {
   return (
-    <ProtectedRoute allowedRoles={["super_admin", "admin", "project_manager"]}>
+    <ProtectedRoute>
       <DeviceGate>
         <EventDetailContent />
       </DeviceGate>

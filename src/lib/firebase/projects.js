@@ -26,6 +26,13 @@ export async function createProject(data, createdByUid) {
     paymentTerms: data.paymentTerms || "",
     quotationAmount: data.quotationAmount || 0,
     status: "Planning",
+    // Project Leader: any employee can be assigned to lead a specific
+    // project. Once set, that employee gets access scoped to only this
+    // project (see firestore.rules and the access checks in
+    // projects/[id]/page.js and events/[eventId]/page.js) — they don't see
+    // or edit other projects. null until an admin/PM assigns one.
+    leaderUid: data.leaderUid || null,
+    leaderName: data.leaderName || null,
     createdBy: createdByUid,
     createdAt: now,
     updatedAt: now,
@@ -48,6 +55,29 @@ export async function getProjectByQuotationId(quotationId) {
   const q = query(collection(db, "projects"), where("quotationId", "==", quotationId));
   const snap = await getDocs(q);
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+/** Projects a given employee currently leads. Used to scope a Project Leader's own view. */
+export async function getProjectsForLeader(uid) {
+  const q = query(
+    collection(db, "projects"),
+    where("leaderUid", "==", uid),
+    orderBy("createdAt", "desc")
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * Sets (or clears, by passing null) the Project Leader for a project.
+ * Admin/PM only (enforced in firestore.rules + hidden in UI for others).
+ */
+export async function setProjectLeader(id, leaderUid, leaderName) {
+  await updateDoc(doc(db, "projects", id), {
+    leaderUid: leaderUid || null,
+    leaderName: leaderName || null,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export async function updateProjectStatus(id, status) {

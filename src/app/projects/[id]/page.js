@@ -12,9 +12,12 @@ import {
   updateProjectDetails,
   updateProjectStatus,
   deleteProject,
+  setProjectLeader,
 } from "@/lib/firebase/projects";
 import { createEvent, getEventsForProject } from "@/lib/firebase/events";
+import { getAllEmployees } from "@/lib/firebase/employees";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
+import { isEventPast } from "@/lib/status";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,20 +49,25 @@ import {
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Crown } from "lucide-react";
+
+const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 function ProjectDetailContent() {
   const { id } = useParams();
   const router = useRouter();
   const { user } = useAuth();
+  const isAdminOrPM = ADMIN_ROLES.includes(user.role);
   const canDelete = ["super_admin", "admin"].includes(user.role);
 
   const [project, setProject] = useState(null);
   const [events, setEvents] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [savingLeader, setSavingLeader] = useState(false);
 
   const [detailsForm, setDetailsForm] = useState({
     projectName: "",
@@ -77,16 +85,49 @@ function ProjectDetailContent() {
     const p = await getProjectById(id);
     setProject(p);
     if (p) {
+      // A Project Leader only has access to the project they lead — anyone
+      // else who isn't admin/PM and isn't the leader gets bounced out.
+      const isLeader = p.leaderUid === user.uid;
+      if (!isAdminOrPM && !isLeader) {
+        toast.error("You don't have access to this project");
+        router.replace("/projects");
+        return;
+      }
+
       setDetailsForm({ projectName: p.projectName || "" });
       const evts = await getEventsForProject(id);
       setEvents(evts);
+
+      if (isAdminOrPM) {
+        try {
+          const emps = await getAllEmployees();
+          setEmployees(emps.filter((e) => e.status === "active"));
+        } catch (err) {
+          toast.error(`Failed loading employees: ${err.message}`);
+        }
+      }
     }
     setLoading(false);
   }
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  async function handleSetLeader(uid) {
+    setSavingLeader(true);
+    try {
+      const emp = uid === "none" ? null : employees.find((e) => e.uid === uid);
+      await setProjectLeader(id, emp?.uid || null, emp?.name || null);
+      setProject((prev) => ({ ...prev, leaderUid: emp?.uid || null, leaderName: emp?.name || null }));
+      toast.success(emp ? `${emp.name} set as Project Leader` : "Project Leader cleared");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingLeader(false);
+    }
+  }
 
   async function handleSaveDetails(e) {
     e.preventDefault();
@@ -192,6 +233,9 @@ function ProjectDetailContent() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={project.status} />
+          <Link href={`/post-production?projectId=${project.id}`}>
+            <Button size="sm" variant="secondary">Post-Production</Button>
+          </Link>
           <Select value={project.status} onValueChange={handleStatusChange}>
             <SelectTrigger className="h-8 w-36 text-xs sm:w-40"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -312,6 +356,48 @@ function ProjectDetailContent() {
                 {savingDetails ? "Saving..." : "Save Details"}
               </Button>
             </form>
+
+            <div className="mt-4 border-t border-slate-200 pt-4">
+              <Label className="mb-1.5 flex items-center gap-1.5">
+                <Crown className="h-3.5 w-3.5 text-amber-500" /> Project Leader
+              </Label>
+              {isAdminOrPM ? (
+                <>
+                  <Select
+                    value={project.leaderUid || "none"}
+                    onValueChange={handleSetLeader}
+                    disabled={savingLeader}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="No leader assigned">
+                        {(v) =>
+                          v === "none" || !v
+                            ? "No leader"
+                            : (() => {
+                                const emp = employees.find((e) => e.uid === v);
+                                return emp ? `${emp.name} (${emp.role})` : project.leaderName || v;
+                              })()
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No leader</SelectItem>
+                      {employees.map((e) => (
+                        <SelectItem key={e.uid} value={e.uid}>
+                          {e.name} ({e.role})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    The leader can manage only this project — assign its team (employees +
+                    freelancers) and update event status — but can't see other projects.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-slate-900">{project.leaderName || "Unassigned"}</p>
+              )}
+            </div>
           </CardContent>
         </Card>
 
@@ -320,28 +406,45 @@ function ProjectDetailContent() {
           {events.length === 0 ? (
             <p className="text-sm text-slate-500">No events yet. Add one to start assigning a team.</p>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              {events.map((ev) => (
-                <Link key={ev.id} href={`/projects/${id}/events/${ev.id}`}>
-                  <Card className="transition hover:border-slate-300">
-                    <CardContent className="flex items-center justify-between gap-3 p-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium text-slate-900">{ev.eventName}</p>
-                        <p className="truncate text-xs text-slate-500">
-                          {ev.eventStartDate
-                            ? ev.eventStartDate === ev.eventEndDate
-                              ? ev.eventStartDate
-                              : `${ev.eventStartDate} – ${ev.eventEndDate}`
-                            : "No date set"}{" "}
-                          · {ev.shootDays || 1} day{ev.shootDays !== 1 && "s"} · {ev.team?.length || 0} assigned
-                        </p>
-                      </div>
-                      <StatusBadge status={ev.status} />
-                    </CardContent>
-                  </Card>
-                </Link>
-              ))}
-            </div>
+            <ol className="relative ml-3 flex flex-col gap-5 border-l-2 border-slate-200 pl-6">
+              {[...events]
+                .sort((a, b) =>
+                  (a.eventStartDate || "").localeCompare(b.eventStartDate || "") ||
+                  (a.createdAt || "").localeCompare(b.createdAt || "")
+                )
+                .map((ev) => {
+                  const done = isEventPast(ev);
+                  return (
+                    <li key={ev.id} className="relative">
+                      <span
+                        className={`absolute -left-[31px] top-1.5 h-3.5 w-3.5 rounded-full border-2 ${
+                          done
+                            ? "border-emerald-600 bg-emerald-600"
+                            : "border-slate-400 bg-white"
+                        }`}
+                      />
+                      <Link href={`/projects/${id}/events/${ev.id}`}>
+                        <Card className="transition hover:border-slate-300">
+                          <CardContent className="flex items-center justify-between gap-3 p-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-slate-900">{ev.eventName}</p>
+                              <p className="truncate text-xs text-slate-500">
+                                {ev.eventStartDate
+                                  ? ev.eventStartDate === ev.eventEndDate
+                                    ? ev.eventStartDate
+                                    : `${ev.eventStartDate} – ${ev.eventEndDate}`
+                                  : "No date set"}{" "}
+                                · {ev.shootDays || 1} day{ev.shootDays !== 1 && "s"} · {ev.team?.length || 0} assigned
+                              </p>
+                            </div>
+                            <StatusBadge status={ev.status} />
+                          </CardContent>
+                        </Card>
+                      </Link>
+                    </li>
+                  );
+                })}
+            </ol>
           )}
         </div>
       </div>
@@ -351,7 +454,7 @@ function ProjectDetailContent() {
 
 export default function ProjectDetailPage() {
   return (
-    <ProtectedRoute allowedRoles={["super_admin", "admin", "project_manager"]}>
+    <ProtectedRoute>
       <DeviceGate>
         <ProjectDetailContent />
       </DeviceGate>

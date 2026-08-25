@@ -19,6 +19,8 @@ import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
 import { ArrowLeft, ClipboardList, History, Users2 } from "lucide-react";
 
+const HIDDEN_ROLES = ["super_admin", "admin"];
+
 function MyEventDetailContent() {
   const { id: projectId, eventId } = useParams();
   const router = useRouter();
@@ -31,6 +33,13 @@ function MyEventDetailContent() {
   const [updateHistory, setUpdateHistory] = useState([]);
   const [newUpdate, setNewUpdate] = useState("");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (HIDDEN_ROLES.includes(user.role)) {
+      router.replace("/dashboard");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.role]);
 
   async function load() {
     setLoading(true);

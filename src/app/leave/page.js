@@ -13,7 +13,8 @@ import {
   decideLeaveRequest,
 } from "@/lib/firebase/leave";
 import {
-  getPendingCompOffRequests,
+  getAllCompOffRequests,
+  getCompOffHistoryForEmployee,
   decideCompOffRequest,
 } from "@/lib/firebase/compOff";
 import {
@@ -48,7 +49,6 @@ function LeaveContent() {
 
   const [history, setHistory] = useState([]);
   const [allRequests, setAllRequests] = useState([]);
-  const [compOffRequests, setCompOffRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -81,7 +81,36 @@ function LeaveContent() {
       status: "auto_leave",
       appliedAt: rec.createdAt,
       rejectionReason: null,
+      kind: "auto",
     };
+  }
+
+  function toCompOffLeaveShape(rec) {
+    return {
+      id: `compoff_${rec.id}`,
+      rawId: rec.id,
+      employeeUid: rec.employeeUid,
+      employeeName: rec.employeeName,
+      department: rec.department,
+      leaveType: "Comp Off",
+      startDate: rec.date,
+      endDate: rec.date,
+      reason: `Worked on ${rec.date} (Sunday)`,
+      status: rec.status,
+      appliedAt: rec.requestedAt,
+      rejectionReason: null,
+      kind: "compoff",
+    };
+  }
+
+  // Leave requests come first, then comp off, then auto-marked leave; most recent within each group first.
+  const KIND_ORDER = { leave: 0, compoff: 1, auto: 2 };
+  function sortRequests(list) {
+    return [...list].sort((a, b) => {
+      const kindDiff = (KIND_ORDER[a.kind] ?? 0) - (KIND_ORDER[b.kind] ?? 0);
+      if (kindDiff !== 0) return kindDiff;
+      return (b.appliedAt || "").localeCompare(a.appliedAt || "");
+    });
   }
 
   async function loadData() {
@@ -91,18 +120,22 @@ function LeaveContent() {
         const yearParam = filterYear === "all" ? undefined : filterYear;
         const all = await getAllLeaveRequests(yearParam);
         const autoLeaves = await getAllAutoLeaveRecords(yearParam);
-        const merged = [...all, ...autoLeaves.map(toLeaveShape)].sort((a, b) =>
-          (b.appliedAt || "").localeCompare(a.appliedAt || "")
-        );
+        const compOffs = await getAllCompOffRequests(yearParam);
+        const merged = sortRequests([
+          ...all.map((r) => ({ ...r, kind: "leave" })),
+          ...compOffs.map(toCompOffLeaveShape),
+          ...autoLeaves.map(toLeaveShape),
+        ]);
         setAllRequests(merged);
-        const pendingCompOffs = await getPendingCompOffRequests();
-        setCompOffRequests(pendingCompOffs);
       } else {
         const own = await getLeaveHistoryForEmployee(user.uid);
         const autoLeaves = await getAutoLeaveRecordsForEmployee(user.uid);
-        const merged = [...own, ...autoLeaves.map(toLeaveShape)].sort((a, b) =>
-          (b.appliedAt || "").localeCompare(a.appliedAt || "")
-        );
+        const ownCompOffs = await getCompOffHistoryForEmployee(user.uid);
+        const merged = sortRequests([
+          ...own.map((r) => ({ ...r, kind: "leave" })),
+          ...ownCompOffs.map(toCompOffLeaveShape),
+          ...autoLeaves.map(toLeaveShape),
+        ]);
         setHistory(merged);
       }
     } catch (err) {
@@ -184,7 +217,7 @@ function LeaveContent() {
 
   async function handleCompOffDecision(req, decision) {
     try {
-      await decideCompOffRequest(req.id, decision, user.uid, req);
+      await decideCompOffRequest(req.rawId, decision, user.uid, req);
       toast.success(`Comp off ${decision}`);
       loadData();
     } catch (err) {
@@ -421,7 +454,7 @@ function LeaveContent() {
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
                     <StatusBadge status={req.status} />
-                    {isAdminView && req.status === "pending" && (
+                    {isAdminView && req.status === "pending" && req.kind === "leave" && (
                       <div className="flex gap-2">
                         <Button size="sm" onClick={() => handleApprove(req)}>
                           Approve
@@ -431,39 +464,21 @@ function LeaveContent() {
                         </Button>
                       </div>
                     )}
+                    {isAdminView && req.status === "pending" && req.kind === "compoff" && (
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={() => handleCompOffDecision(req, "approved")}>
+                          Approve
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => handleCompOffDecision(req, "rejected")}>
+                          Reject
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
             ))
           )}
-        </div>
-      )}
-
-      {isAdminView && compOffRequests.length > 0 && (
-        <div className="mt-8">
-          <h3 className="mb-3 text-base font-medium text-slate-900 sm:text-lg">
-            Pending Comp Off Requests
-          </h3>
-          <div className="grid gap-3">
-            {compOffRequests.map((req) => (
-              <Card key={req.id}>
-                <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="font-medium text-slate-900">{req.employeeName}</p>
-                    <p className="text-sm text-slate-700">Worked on {req.date} (Sunday)</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => handleCompOffDecision(req, "approved")}>
-                      Approve
-                    </Button>
-                    <Button size="sm" variant="secondary" onClick={() => handleCompOffDecision(req, "rejected")}>
-                      Reject
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
         </div>
       )}
 

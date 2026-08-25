@@ -1,28 +1,39 @@
 import { cn } from "@/lib/utils";
 
 const STATUS_STYLES = {
-  active: "bg-green-100 text-green-700",
-  inactive: "bg-slate-100 text-slate-600",
-  pending: "bg-yellow-100 text-yellow-700",
-  approved: "bg-green-100 text-green-700",
-  rejected: "bg-red-100 text-red-700",
-  blocked: "bg-red-100 text-red-700",
-  late: "bg-orange-100 text-orange-700",
-  absent: "bg-red-100 text-red-700",
-  present: "bg-green-100 text-green-700",
-  on_leave: "bg-blue-100 text-blue-700",
-  resigned: "bg-slate-100 text-slate-500",
-  Paid: "bg-blue-100 text-blue-700",
-  Sick: "bg-pink-100 text-pink-700",
-  New: "bg-slate-100 text-slate-700",
-  Contacted: "bg-blue-100 text-blue-700",
-  "Meeting Scheduled": "bg-purple-100 text-purple-700",
-  Quoted: "bg-yellow-100 text-yellow-700",
-  Won: "bg-green-100 text-green-700",
-  Lost: "bg-red-100 text-red-700",
-  auto_leave: "bg-amber-100 text-amber-700",
-  Draft: "bg-slate-100 text-slate-600",
-  Sent: "bg-blue-100 text-blue-700"
+  active: "bg-emerald-100 text-emerald-800",
+  inactive: "bg-stone-100 text-stone-600",
+  pending: "bg-amber-100 text-amber-800",
+  approved: "bg-emerald-100 text-emerald-800",
+  rejected: "bg-rose-100 text-rose-800",
+  blocked: "bg-rose-100 text-rose-800",
+  late: "bg-orange-100 text-orange-800",
+  absent: "bg-rose-100 text-rose-800",
+  present: "bg-emerald-100 text-emerald-800",
+  on_leave: "bg-stone-200 text-stone-700",
+  resigned: "bg-stone-100 text-stone-500",
+  Paid: "bg-stone-200 text-stone-700",
+  Sick: "bg-rose-100 text-rose-700",
+  New: "bg-stone-100 text-stone-700",
+  Contacted: "bg-stone-200 text-stone-700",
+  "Meeting Scheduled": "bg-amber-100 text-amber-800",
+  Quoted: "bg-amber-100 text-amber-800",
+  Won: "bg-emerald-100 text-emerald-800",
+  Lost: "bg-rose-100 text-rose-800",
+  auto_leave: "bg-amber-100 text-amber-800",
+  Draft: "bg-stone-100 text-stone-600",
+  Sent: "bg-stone-200 text-stone-700",
+  // Post-production task pipeline
+  "Not Started": "bg-stone-100 text-stone-600",
+  "In Progress": "bg-amber-100 text-amber-800",
+  "In Review": "bg-stone-200 text-stone-700",
+  "Revision Needed": "bg-rose-100 text-rose-800",
+  Completed: "bg-emerald-100 text-emerald-800",
+  // Task priority
+  Low: "bg-stone-100 text-stone-600",
+  Medium: "bg-amber-100 text-amber-800",
+  High: "bg-orange-100 text-orange-800",
+  Urgent: "bg-rose-100 text-rose-800"
 };
 
 const STATUS_LABELS = {
@@ -40,7 +51,7 @@ export default function StatusBadge({ status, children, className }) {
     <span
       className={cn(
         "inline-flex h-5 w-fit shrink-0 items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium capitalize whitespace-nowrap",
-        STATUS_STYLES[status] || "bg-slate-100 text-slate-700",
+        STATUS_STYLES[status] || "bg-stone-100 text-stone-700",
         className
       )}
     >
