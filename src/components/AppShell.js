@@ -14,6 +14,7 @@ import {
   Clock,
   Calendar,
   CalendarRange,
+  CalendarDays,
   Monitor,
   BarChart3,
   FolderKanban,
@@ -22,6 +23,7 @@ import {
   LogOut,
   Menu,
   X,
+  Settings,
 } from "lucide-react";
 
 // v1 scope: only these modules are active. Other pages/files (teams,
@@ -34,8 +36,9 @@ const NAV_ITEMS = [
   { label: "Leads", href: "/leads", icon: Target, roles: ["super_admin", "admin", "project_manager"] },
   // Visible to everyone: admins/PMs get the full project list, everyone
   // else only sees projects they've been assigned as Project Leader on.
-  { label: "Teams", href: "/projects", icon: FolderKanban, roles: null },
-  { label: "My Projects", href: "/my-projects", icon: FolderKanban, roles: null, excludeRoles: ["super_admin", "admin"] },
+  { label: "Projects", href: "/projects", icon: FolderKanban, roles: null },
+  { label: "Assignments", href: "/my-projects", icon: FolderKanban, roles: null, excludeRoles: ["super_admin", "admin"] },
+  // { label: "Events", href: "/events", icon: CalendarDays, roles: ["super_admin", "admin", "project_manager"] },
   { label: "Post-Production", href: "/post-production", icon: Clapperboard, roles: null },
   { label: "Calendar", href: "/calendar", icon: CalendarRange, roles: null },
   { label: "Leave", href: "/leave", icon: Calendar, roles: null },
@@ -44,6 +47,7 @@ const NAV_ITEMS = [
   { label: "Freelancers", href: "/freelancers", icon: UserRound, roles: ["super_admin", "admin", "project_manager"] },
   { label: "Analytics", href: "/analytics", icon: BarChart3, roles: ["super_admin", "admin", "project_manager"] },
   { label: "Devices", href: "/devices", icon: Monitor, roles: ["super_admin", "admin"] },
+  { label: "Settings", href: "/settings", icon: Settings, roles: ["super_admin", "admin", "project_manager"] },
 ];
 
 export default function AppShell({ children }) {

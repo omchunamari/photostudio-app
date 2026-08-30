@@ -58,6 +58,11 @@ function makeId() {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** Sum of each team member's per-assignment cost for one event. */
+export function sumEventTeamCost(team) {
+  return (team || []).reduce((sum, m) => sum + (Number(m.cost) || 0), 0);
+}
+
 export function computeShootDays(startDate, endDate) {
   if (!startDate || !endDate) return 1;
   const days = Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1;

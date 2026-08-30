@@ -88,25 +88,51 @@ function CalendarContent() {
     async function load() {
       setLoading(true);
       setError("");
-      try {
-        const [evts, leaves, tsks, ledProjects, lds] = await Promise.all([
-          isOrgWide ? getAllEvents() : getEventsForEmployee(user.uid),
-          isHRView ? getAllLeaveRequests(cursor.year) : getLeaveHistoryForEmployee(user.uid),
-          isOrgWide ? getAllTasks() : getTasksForEmployee(user.uid),
-          isAdminOrPM ? Promise.resolve([]) : getProjectsForLeader(user.uid),
-          isAdminOrPM ? getAllLeads() : Promise.resolve([]),
-        ]);
-        if (cancelled) return;
-        setEvents(evts);
-        setLeaveRequests(leaves.filter((l) => l.status === "approved" || l.status === "pending"));
-        setTasks(tsks);
-        setLedProjectIds(new Set(ledProjects.map((p) => p.id)));
-        setLeads(lds);
-      } catch (err) {
-        if (!cancelled) setError(err.message || "Failed to load calendar data");
-      } finally {
-        if (!cancelled) setLoading(false);
+      // Promise.allSettled instead of Promise.all: these five sources are
+      // independent (different collections/queries with their own access
+      // rules and, in some cases, their own composite index requirements),
+      // so one of them failing — e.g. a missing Firestore index — should
+      // never blank out the other four. Each source keeps its previously
+      // loaded value on failure and reports its own error individually.
+      const results = await Promise.allSettled([
+        isOrgWide ? getAllEvents() : getEventsForEmployee(user.uid),
+        isHRView ? getAllLeaveRequests(cursor.year) : getLeaveHistoryForEmployee(user.uid),
+        isOrgWide ? getAllTasks() : getTasksForEmployee(user.uid),
+        isAdminOrPM ? Promise.resolve([]) : getProjectsForLeader(user.uid),
+        isAdminOrPM ? getAllLeads() : Promise.resolve([]),
+      ]);
+      if (cancelled) return;
+
+      const [evtsResult, leavesResult, tasksResult, ledResult, leadsResult] = results;
+      const labels = ["events", "leave", "tasks", "your led projects", "leads"];
+      const failed = results
+        .map((r, i) => (r.status === "rejected" ? labels[i] : null))
+        .filter(Boolean);
+
+      if (evtsResult.status === "fulfilled") setEvents(evtsResult.value);
+      if (leavesResult.status === "fulfilled") {
+        setLeaveRequests(
+          leavesResult.value.filter((l) => l.status === "approved" || l.status === "pending")
+        );
       }
+      if (tasksResult.status === "fulfilled") setTasks(tasksResult.value);
+      if (ledResult.status === "fulfilled") {
+        setLedProjectIds(new Set(ledResult.value.map((p) => p.id)));
+      }
+      if (leadsResult.status === "fulfilled") setLeads(leadsResult.value);
+
+      if (failed.length > 0) {
+        // Log the underlying reasons for debugging (e.g. a missing
+        // composite index shows up here with a Firestore console link),
+        // while keeping the on-screen message short.
+        results.forEach((r, i) => {
+          if (r.status === "rejected") {
+            console.error(`Calendar: failed to load ${labels[i]}:`, r.reason);
+          }
+        });
+        setError(`Couldn't load: ${failed.join(", ")}. Check the console for details.`);
+      }
+      setLoading(false);
     }
     load();
     return () => {
@@ -153,7 +179,7 @@ function CalendarContent() {
       if (t.dueDate) ensure(t.dueDate).tasks.push(t);
     });
     leads.forEach((ld) => {
-      if (ld.meetingDate) ensure(ld.meetingDate).leads.push({ ...ld, kind: "meeting" });
+      if (ld.eventDate) ensure(ld.eventDate).leads.push({ ...ld, kind: "event" });
       if (ld.followUpDate) ensure(ld.followUpDate).leads.push({ ...ld, kind: "follow-up" });
     });
     return map;
@@ -292,7 +318,7 @@ function CalendarContent() {
               </span>
               {isAdminOrPM && (
                 <span className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full bg-[oklch(0.7_0.15_260)]" /> Lead meeting / follow-up
+                  <span className="h-2 w-2 rounded-full bg-[oklch(0.7_0.15_260)]" /> Lead event / follow-up
                 </span>
               )}
             </div>
@@ -402,7 +428,7 @@ function CalendarContent() {
                 {isAdminOrPM && (
                   <DaySection
                     icon={<Target className="h-3.5 w-3.5" />}
-                    title="Lead Meetings / Follow-ups"
+                    title="Lead Events / Follow-ups"
                     empty="No lead meetings or follow-ups"
                   >
                     {selectedInfo.leads.map((ld) => (
@@ -414,7 +440,7 @@ function CalendarContent() {
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-foreground">{ld.clientName}</p>
                           <p className="text-xs text-muted-foreground">
-                            {ld.kind === "meeting" ? "Meeting" : "Follow-up"} · {ld.projectType}
+                            {ld.kind === "event" ? "Tentative Event" : "Follow-up"} · {ld.projectType}
                           </p>
                           <div className="mt-1">
                             <StatusBadge status={ld.status} />

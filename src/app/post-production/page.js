@@ -1,35 +1,37 @@
 "use client";
 
 import { useEffect, useMemo, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  TASK_TYPES,
-  TASK_STATUSES,
-  TASK_PRIORITIES,
-  createTask,
-  getAllTasks,
-  getTasksForEmployee,
-  updateTaskStatus,
-  reassignTask,
-  updateTask,
-  addTaskComment,
-  deleteTask,
-  isOverdue,
-} from "@/lib/firebase/postProduction";
-import { getAllEmployees } from "@/lib/firebase/employees";
+  DELIVERABLE_TYPES,
+  DELIVERABLE_STATUSES,
+  getAllDeliverables,
+  getDeliverablesForEmployee,
+  addDeliverableStatusUpdate,
+  ensureDeliverablesForProject,
+  addDeliverable,
+  updateDeliverable,
+  deleteDeliverable,
+} from "@/lib/firebase/deliverables";
+import {
+  getAllStorageEntries,
+  getStorageEntriesForEmployee,
+  logStorageEntry,
+  updateStorageEntry,
+} from "@/lib/firebase/storageEntries";
 import { getAllProjects } from "@/lib/firebase/projects";
-import { getEventsForProject } from "@/lib/firebase/events";
+import { getAllEvents, getEventsForProject, getEventsForEmployee } from "@/lib/firebase/events";
+import { getAllEmployees } from "@/lib/firebase/employees";
+import { getAllFreelancers } from "@/lib/firebase/freelancers";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import AvatarInitials from "@/components/ui/avatar-initials";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableHeader,
@@ -54,90 +56,89 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import StatusBadge from "@/components/ui/status-badge";
-import { Plus, Link as LinkIcon, MessageSquare, Trash2, CalendarClock, ArrowRightLeft } from "lucide-react";
+import {
+  BarChart3,
+  Layers,
+  HardDrive,
+  Search,
+  Plus,
+  Pencil,
+  Trash2,
+  AlertTriangle,
+  MessageSquare,
+  FileText,
+} from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
-const emptyForm = {
-  title: "",
-  description: "",
-  taskType: TASK_TYPES[0],
-  taskTypeOther: "",
-  projectId: "",
-  eventId: "",
-  assignedUids: [],
-  priority: "Medium",
-  dueDate: "",
-  deliverableLink: "",
+const STATUS_COLORS = {
+  Done: "oklch(0.65 0.14 155)",
+  "In Progress": "oklch(0.75 0.15 75)",
+  Pending: "oklch(0.75 0.05 75)",
 };
 
-function NewTaskDialog({ open, onOpenChange, employees, projects, onCreated, createdByUid, createdByName, initialProjectId }) {
-  const [form, setForm] = useState(emptyForm);
-  const [events, setEvents] = useState([]);
+/** Indian financial year (Apr–Mar) label list, current year first, going back 4 years. */
+function getFinancialYearOptions() {
+  const now = new Date();
+  const currentFyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const options = [];
+  for (let i = 0; i < 5; i++) {
+    const startYear = currentFyStart - i;
+    options.push({
+      value: `${startYear}`,
+      label: `FY ${startYear}-${String(startYear + 1).slice(2)}`,
+      startDate: `${startYear}-04-01`,
+      endDate: `${startYear + 1}-03-31`,
+    });
+  }
+  return options;
+}
+
+function fmtDate(d) {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Deliverable edit dialog                                                 */
+/* ---------------------------------------------------------------------- */
+
+function DeliverableDialog({ open, onOpenChange, deliverable, people, onSaved }) {
+  const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) setForm({ ...emptyForm, projectId: initialProjectId || "" });
-  }, [open, initialProjectId]);
-
-  useEffect(() => {
-    if (!form.projectId) {
-      setEvents([]);
-      return;
+    if (deliverable) {
+      setForm({
+        status: deliverable.status || "Pending",
+        assignedUid: deliverable.assignedUid || "",
+        startDate: deliverable.startDate || "",
+        endDate: deliverable.endDate || "",
+        deadline: deliverable.deadline || "",
+        instructions: deliverable.instructions || "",
+      });
     }
-    getEventsForProject(form.projectId)
-      .then(setEvents)
-      .catch(() => setEvents([]));
-  }, [form.projectId]);
+  }, [deliverable]);
 
-  function update(field, value) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  }
+  if (!deliverable) return null;
 
-  function toggleAssignee(uid) {
-    setForm((prev) => ({
-      ...prev,
-      assignedUids: prev.assignedUids.includes(uid)
-        ? prev.assignedUids.filter((u) => u !== uid)
-        : [...prev.assignedUids, uid],
-    }));
-  }
-
-  const selectedProject = projects.find((p) => p.id === form.projectId);
-  const selectedEvent = events.find((e) => e.id === form.eventId);
-  const selectedEmployees = employees.filter((e) => form.assignedUids.includes(e.uid));
-
-  async function handleSubmit() {
-    if (!form.title.trim()) {
-      toast.error("Give the task a title");
-      return;
-    }
-    if (form.assignedUids.length === 0) {
-      toast.error("Assign this task to at least one employee");
-      return;
-    }
-    if (form.taskType === "Other" && !form.taskTypeOther.trim()) {
-      toast.error("Describe the deliverable type");
-      return;
-    }
+  async function handleSave() {
     setSaving(true);
     try {
-      await createTask(
-        {
-          ...form,
-          taskType: form.taskType === "Other" ? form.taskTypeOther.trim() : form.taskType,
-          projectName: selectedProject?.projectName || "",
-          clientName: selectedProject?.clientName || "",
-          eventName: selectedEvent?.eventName || null,
-          eventId: form.eventId || null,
-          assignedNames: selectedEmployees.map((e) => e.name),
-        },
-        createdByUid,
-        createdByName
-      );
-      toast.success(form.assignedUids.length > 1 ? "Task assigned to team" : "Task assigned");
+      const person = people.find((p) => p.uid === form.assignedUid);
+      await updateDeliverable(deliverable.projectId, deliverable.id, {
+        status: form.status,
+        assignedUid: form.assignedUid || null,
+        assignedName: person?.name || null,
+        startDate: form.startDate || null,
+        endDate: form.endDate || null,
+        deadline: form.deadline || null,
+        instructions: form.instructions || "",
+      });
+      toast.success("Deliverable updated");
       onOpenChange(false);
-      onCreated();
+      onSaved();
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -147,760 +148,1142 @@ function NewTaskDialog({ open, onOpenChange, employees, projects, onCreated, cre
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-lg">
+      <DialogContent className="w-[95vw] max-w-md">
         <DialogHeader>
-          <DialogTitle>New Post-Production Task</DialogTitle>
+          <DialogTitle>{deliverable.type}</DialogTitle>
         </DialogHeader>
-        <div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1">
+        <div className="flex flex-col gap-4">
           <div>
-            <Label htmlFor="title">Title</Label>
-            <Input
-              id="title"
-              value={form.title}
-              onChange={(e) => update("title", e.target.value)}
-              placeholder="e.g. Culling — Sharma Wedding Day 1"
-            />
+            <Label>Status</Label>
+            <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {DELIVERABLE_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
-            <Label htmlFor="description">Brief / Instructions</Label>
+            <Label>Assigned To</Label>
+            <Select
+              value={form.assignedUid || "none"}
+              onValueChange={(v) => setForm((f) => ({ ...f, assignedUid: v === "none" ? "" : v }))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Unassigned">
+                  {(v) => (v === "none" || !v ? "Unassigned" : people.find((p) => p.uid === v)?.name || "Unassigned")}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Unassigned</SelectItem>
+                {people.map((p) => (
+                  <SelectItem key={p.uid} value={p.uid}>{p.name}{p.isFreelancer ? " (Freelancer)" : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label>Start</Label>
+              <Input type="date" value={form.startDate || ""} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
+            </div>
+            <div>
+              <Label>End</Label>
+              <Input type="date" value={form.endDate || ""} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
+            </div>
+            <div>
+              <Label>Deadline</Label>
+              <Input type="date" value={form.deadline || ""} onChange={(e) => setForm((f) => ({ ...f, deadline: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <Label>Instructions for assignee</Label>
             <Textarea
-              id="description"
-              value={form.description}
-              onChange={(e) => update("description", e.target.value)}
-              placeholder="What needs to be done, style notes, folder paths, etc."
+              value={form.instructions || ""}
+              onChange={(e) => setForm((f) => ({ ...f, instructions: e.target.value }))}
+              placeholder="Anything the assignee should know — edit style, folder to pull from, client preferences..."
+              rows={3}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Task Type</Label>
-              <Select value={form.taskType} onValueChange={(v) => update("taskType", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {TASK_TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {form.taskType === "Other" && (
-                <Input
-                  className="mt-2"
-                  value={form.taskTypeOther}
-                  onChange={(e) => update("taskTypeOther", e.target.value)}
-                  placeholder="Describe the deliverable type"
-                />
-              )}
+          {(deliverable.updates || []).length > 0 && (
+            <div className="flex flex-col gap-2">
+              <Label>Updates from assignee</Label>
+              <div className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-md border p-2">
+                {[...deliverable.updates].sort((a, b) => new Date(b.at) - new Date(a.at)).map((u, i) => (
+                  <div key={i} className="text-xs">
+                    <span className="font-medium text-foreground">{u.byName || "Someone"}</span>
+                    <span className="text-muted-foreground"> · {fmtDate(u.at)}{u.status ? ` · moved to ${u.status}` : ""}</span>
+                    <p className="text-muted-foreground">{u.text}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div>
-              <Label>Priority</Label>
-              <Select value={form.priority} onValueChange={(v) => update("priority", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {TASK_PRIORITIES.map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Project (optional)</Label>
-              <Select value={form.projectId || "none"} onValueChange={(v) => update("projectId", v === "none" ? "" : v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="No project">
-                    {(v) => (v === "none" || !v ? "No project" : projects.find((p) => p.id === v)?.projectName || "No project")}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No project</SelectItem>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.projectName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Event (optional)</Label>
-              <Select
-                value={form.eventId || "none"}
-                onValueChange={(v) => update("eventId", v === "none" ? "" : v)}
-                disabled={!form.projectId || events.length === 0}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Whole project">
-                    {(v) => (v === "none" || !v ? "Whole project" : events.find((e) => e.id === v)?.eventName || "Whole project")}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Whole project</SelectItem>
-                  {events.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>{e.eventName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div>
-            <Label>Assign To</Label>
-            <div className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-md border border-border p-2">
-              {employees.length === 0 && (
-                <p className="text-xs text-muted-foreground">No employees found.</p>
-              )}
-              {employees.map((e) => (
-                <label key={e.uid} className="flex items-center gap-2 rounded px-1 py-1 text-sm hover:bg-muted">
-                  <Checkbox
-                    checked={form.assignedUids.includes(e.uid)}
-                    onCheckedChange={() => toggleAssignee(e.uid)}
-                  />
-                  <span className="text-foreground">
-                    {e.name} {e.role ? <span className="text-muted-foreground">· {e.role.replace("_", " ")}</span> : null}
-                  </span>
-                </label>
-              ))}
-            </div>
-            {form.assignedUids.length > 1 && (
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Assigning to {form.assignedUids.length} people — it's one shared task, and any of them can update its status.
-              </p>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="dueDate">Due Date</Label>
-              <Input
-                id="dueDate"
-                type="date"
-                value={form.dueDate}
-                onChange={(e) => update("dueDate", e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="deliverableLink">Data Path</Label>
-              <Input
-                id="deliverableLink"
-                value={form.deliverableLink}
-                onChange={(e) => update("deliverableLink", e.target.value)}
-                placeholder="Storage Path"
-              />
-            </div>
-          </div>
+          )}
         </div>
         <DialogFooter>
-          <Button onClick={handleSubmit} disabled={saving}>
-            {saving ? "Assigning..." : "Assign Task"}
-          </Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function TaskDetailDialog({ task, open, onOpenChange, isAdminView, employees, currentUid, currentName, onChanged }) {
-  const [comment, setComment] = useState("");
-  const [deliverableLink, setDeliverableLink] = useState("");
-  const [savingLink, setSavingLink] = useState(false);
-  const [reassignUid, setReassignUid] = useState("");
-  const [posting, setPosting] = useState(false);
+/**
+ * Employee-facing counterpart to DeliverableDialog above — lets the
+ * assigned employee change status and leave a note, without exposing
+ * reassignment/date fields (firestore.rules only allows them to touch
+ * status/updates/updatedAt on this doc).
+ */
+function EmployeeDeliverableDialog({ open, onOpenChange, deliverable, onSaved }) {
+  const { user } = useAuth();
+  const [status, setStatus] = useState("Pending");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (task) {
-      setDeliverableLink(task.deliverableLink || "");
-      setReassignUid("");
-      setComment("");
+    if (deliverable) {
+      setStatus(deliverable.status || "Pending");
+      setNote("");
     }
-  }, [task]);
+  }, [deliverable]);
 
-  if (!task) return null;
+  if (!deliverable) return null;
 
-  const canEdit = isAdminView || task.assignedUid === currentUid || (task.assignedUids || []).includes(currentUid);
+  const history = [...(deliverable.updates || [])].sort(
+    (a, b) => new Date(b.at) - new Date(a.at)
+  );
 
-  async function handleStatusChange(status) {
+  async function handleSave() {
+    setSaving(true);
     try {
-      await updateTaskStatus(task.id, status, task);
-      toast.success(`Marked ${status}`);
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    }
-  }
-
-  async function handleSaveLink() {
-    setSavingLink(true);
-    try {
-      await updateTask(task.id, { deliverableLink });
-      toast.success("Deliverable link saved");
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingLink(false);
-    }
-  }
-
-  async function handleReassign() {
-    const target = employees.find((e) => e.uid === reassignUid);
-    if (!target) return;
-    try {
-      await reassignTask(task.id, target.uid, target.name, currentName);
-      toast.success(`Reassigned to ${target.name}`);
+      await addDeliverableStatusUpdate(deliverable.projectId, deliverable.id, {
+        status,
+        note,
+        byUid: user.uid,
+        byName: user.name || "",
+      });
+      toast.success("Deliverable updated");
       onOpenChange(false);
-      onChanged();
+      onSaved();
     } catch (err) {
-      toast.error(err.message);
-    }
-  }
-
-  async function handlePostComment() {
-    if (!comment.trim()) return;
-    setPosting(true);
-    try {
-      await addTaskComment(task.id, comment.trim(), currentUid, currentName);
-      setComment("");
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message || "Failed to update deliverable");
     } finally {
-      setPosting(false);
-    }
-  }
-
-  async function handleDelete() {
-    try {
-      await deleteTask(task.id);
-      toast.success("Task deleted");
-      onOpenChange(false);
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
+      setSaving(false);
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-lg">
+      <DialogContent className="w-[95vw] max-w-md">
         <DialogHeader>
-          <DialogTitle>{task.title}</DialogTitle>
+          <DialogTitle>{deliverable.type}</DialogTitle>
         </DialogHeader>
-        <div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={task.status} />
-            <StatusBadge status={task.priority} />
-            <span className="text-xs text-muted-foreground">{task.taskType}</span>
-          </div>
-
-          {(task.projectName || task.eventName) && (
-            <p className="text-sm text-muted-foreground">
-              {task.projectName}
-              {task.eventName ? ` · ${task.eventName}` : ""}
-              {task.clientName ? ` · ${task.clientName}` : ""}
-            </p>
+        <div className="flex flex-col gap-4">
+          {deliverable.projectName && (
+            <p className="text-sm text-muted-foreground">{deliverable.projectName}</p>
           )}
-
-          {task.description && (
-            <p className="whitespace-pre-wrap text-sm text-foreground">{task.description}</p>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <span>
-              Assigned to{" "}
-              <span className="font-medium text-foreground">
-                {(task.assignedNames?.length ? task.assignedNames : [task.assignedName]).filter(Boolean).join(", ")}
-              </span>
-            </span>
-            {task.dueDate && (
-              <span className={isOverdue(task) ? "font-medium text-destructive" : ""}>
-                Due {task.dueDate}
-              </span>
-            )}
-          </div>
-
-          {canEdit && (
-            <div>
-              <Label>Status</Label>
-              <Select value={task.status} onValueChange={handleStatusChange}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {TASK_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {deliverable.instructions && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Instructions</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-amber-900">{deliverable.instructions}</p>
             </div>
           )}
-
-          {canEdit && (
-            <div>
-              <Label htmlFor="deliverableLink">Data Path</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="deliverableLink"
-                  value={deliverableLink}
-                  onChange={(e) => setDeliverableLink(e.target.value)}
-                  placeholder="Storage Path"
-                />
-                <Button size="sm" variant="secondary" onClick={handleSaveLink} disabled={savingLink}>
-                  Save
-                </Button>
-              </div>
-              {task.deliverableLink && (
-                <a
-                  href={task.deliverableLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-xs text-accent hover:underline"
-                >
-                  <LinkIcon className="h-3 w-3" /> Open current link
-                </a>
-              )}
-            </div>
-          )}
-
-          {isAdminView && (
-            <div>
-              <Label>Reassign To (replaces all current assignees)</Label>
-              <div className="flex gap-2">
-                <Select value={reassignUid} onValueChange={setReassignUid}>
-                  <SelectTrigger className="flex-1">
-                    <SelectValue placeholder="Select employee">
-                      {(v) => employees.find((e) => e.uid === v)?.name || "Select employee"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button size="sm" variant="secondary" onClick={handleReassign} disabled={!reassignUid}>
-                  <ArrowRightLeft className="h-4 w-4" />
-                </Button>
-              </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                This hands the task fully to one person. To add someone alongside the current assignee(s) instead of replacing them, create a new task for that person.
-              </p>
-            </div>
-          )}
-
           <div>
-            <Label className="mb-2 flex items-center gap-1.5">
-              <MessageSquare className="h-3.5 w-3.5" /> Comments
-            </Label>
-            <div className="flex flex-col gap-2">
-              {(task.comments || []).length === 0 ? (
-                <p className="text-xs text-muted-foreground">No comments yet.</p>
-              ) : (
-                task.comments.map((c) => (
-                  <div key={c.id} className="rounded-md border border-border bg-muted/40 p-2 text-sm">
-                    <p className="text-foreground">{c.text}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {c.addedBy} · {new Date(c.addedAt).toLocaleString()}
-                    </p>
-                  </div>
-                ))
-              )}
-            </div>
-            {canEdit && (
-              <div className="mt-2 flex gap-2">
-                <Input
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  placeholder="Add an update or note..."
-                  onKeyDown={(e) => e.key === "Enter" && handlePostComment()}
-                />
-                <Button size="sm" onClick={handlePostComment} disabled={posting || !comment.trim()}>
-                  Post
-                </Button>
-              </div>
-            )}
+            <Label>Status</Label>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {DELIVERABLE_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
+          <div>
+            <Label>Add an update (optional)</Label>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="What's the latest on this deliverable?"
+              rows={3}
+            />
+          </div>
+          {history.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <Label>Previous updates</Label>
+              <div className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-md border p-2">
+                {history.map((u, i) => (
+                  <div key={i} className="text-xs">
+                    <span className="font-medium text-foreground">{u.byName || "Someone"}</span>
+                    <span className="text-muted-foreground"> · {fmtDate(u.at)}{u.status ? ` · moved to ${u.status}` : ""}</span>
+                    <p className="text-muted-foreground">{u.text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-        {isAdminView && (
-          <DialogFooter>
-            <Button variant="secondary" onClick={handleDelete} className="text-destructive hover:text-destructive">
-              <Trash2 className="h-4 w-4" /> Delete Task
-            </Button>
-          </DialogFooter>
-        )}
+        <DialogFooter>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
+/**
+ * Employee's own "log storage" list — one row per event they're on,
+ * showing whether they've already logged their storage handoff for it,
+ * with a button to log it if not. Unlike the admin StorageEventList,
+ * this only ever shows the current employee's own row per event, since
+ * that's the only entry firestore.rules lets them create/edit.
+ */
+function MyStorageLogList({ events, user, entriesByKey, onLogStorage, onViewStorage }) {
+  if (events.length === 0) {
+    return <p className="text-sm text-muted-foreground">You&apos;re not assigned to any events yet.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {events.map((ev) => {
+        const me = (ev.team || []).find((m) => m.uid === user.uid) || { uid: user.uid, name: user.name, role: "" };
+        const entry = entriesByKey.get(`${ev.id}_${user.uid}`);
+        const day = ev.eventStartDate ? fmtDate(ev.eventStartDate) : "—";
+        return (
+          <div key={ev.id} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+            <div>
+              <p className="text-sm font-medium text-foreground">{ev.eventName}</p>
+              <p className="text-xs text-muted-foreground">{ev.projectName}{ev.clientName ? ` · ${ev.clientName}` : ""} · {day}</p>
+            </div>
+            {entry ? (
+              <button
+                type="button"
+                className="text-xs text-emerald-700 underline-offset-2 hover:underline"
+                onClick={() => onViewStorage(ev, me, entry)}
+              >
+                {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""}
+              </button>
+            ) : (
+              <Button size="sm" variant="secondary" onClick={() => onLogStorage(ev, me)}>
+                + Log Storage
+              </Button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AddDeliverableDialog({ open, onOpenChange, project, onAdded }) {
+  const [type, setType] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) setType("");
+  }, [open]);
+
+  async function handleAdd() {
+    if (!type.trim()) {
+      toast.error("Name this deliverable");
+      return;
+    }
+    setSaving(true);
+    try {
+      await addDeliverable(project, type.trim());
+      toast.success("Deliverable added");
+      onOpenChange(false);
+      onAdded();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[95vw] max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Add Deliverable</DialogTitle>
+        </DialogHeader>
+        <div>
+          <Label htmlFor="dtype">Name</Label>
+          <Input id="dtype" value={type} onChange={(e) => setType(e.target.value)} placeholder="e.g. Teaser, Cinematic Trailer" />
+        </div>
+        <DialogFooter>
+          <Button onClick={handleAdd} disabled={saving}>{saving ? "Adding..." : "Add"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Storage entry dialog                                                    */
+/* ---------------------------------------------------------------------- */
+
+function StorageEntryDialog({ open, onOpenChange, context, currentUid, currentName, onSaved }) {
+  const [date, setDate] = useState("");
+  const [cards, setCards] = useState([{ label: "", gb: "" }]);
+  const [mainStorage, setMainStorage] = useState("");
+  const [backupStorage, setBackupStorage] = useState("");
+  const [copiedBy, setCopiedBy] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const existing = context?.existingEntry || null;
+
+  useEffect(() => {
+    if (open && context) {
+      if (existing) {
+        setDate(existing.date || "");
+        setCards(existing.cards?.length ? existing.cards.map((c) => ({ label: c.label, gb: String(c.gb ?? "") })) : [{ label: "", gb: "" }]);
+        setMainStorage(existing.mainStorage || "");
+        setBackupStorage(existing.backupStorage || "");
+        setCopiedBy(existing.copiedBy || "");
+        setNotes(existing.notes || "");
+      } else {
+        setDate(context.event.eventStartDate || "");
+        setCards([{ label: "", gb: "" }]);
+        setMainStorage("");
+        setBackupStorage("");
+        setCopiedBy("");
+        setNotes("");
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, context]);
+
+  if (!context) return null;
+  const { event, member } = context;
+
+  function updateCard(i, field, value) {
+    setCards((prev) => prev.map((c, idx) => (idx === i ? { ...c, [field]: value } : c)));
+  }
+
+  async function handleSave() {
+    if (!date) {
+      toast.error("Date is required");
+      return;
+    }
+    if (!cards.some((c) => c.label.trim())) {
+      toast.error("Add at least one card");
+      return;
+    }
+    if (!mainStorage.trim()) {
+      toast.error("Main storage is required");
+      return;
+    }
+    if (!copiedBy.trim()) {
+      toast.error("Copied By is required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        date,
+        cards: cards.filter((c) => c.label.trim()).map((c) => ({ label: c.label.trim(), gb: Number(c.gb) || 0 })),
+        mainStorage: mainStorage.trim(),
+        backupStorage: backupStorage.trim(),
+        copiedBy: copiedBy.trim(),
+        notes: notes.trim(),
+      };
+      if (existing) {
+        await updateStorageEntry(existing.id, payload);
+      } else {
+        await logStorageEntry(
+          {
+            projectId: event.projectId,
+            projectName: event.projectName,
+            clientName: event.clientName,
+            eventId: event.id,
+            eventName: event.eventName,
+            memberUid: member.uid,
+            memberName: member.name,
+            memberRole: member.role,
+            ...payload,
+          },
+          currentUid,
+          currentName
+        );
+      }
+      toast.success("Storage entry saved");
+      onOpenChange(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[95vw] max-w-md">
+        <DialogHeader>
+          <DialogTitle>{existing ? "Storage Entry Details" : "Storage Entry"}</DialogTitle>
+        </DialogHeader>
+        <p className="-mt-2 text-sm text-muted-foreground">{event.eventName} — {member.role || "Team"}</p>
+        {existing && (
+          <p className="-mt-2 text-xs text-muted-foreground">
+            Logged by {existing.loggedBy || "someone"}{existing.createdAt ? ` · ${fmtDate(existing.createdAt)}` : ""}
+          </p>
+        )}
+        <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+          <div>
+            <Label>Team Member</Label>
+            <Input value={member.name} disabled />
+          </div>
+          <div>
+            <Label>Date</Label>
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <Label className="mb-0">Cards & Data Size</Label>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setCards((prev) => [...prev, { label: "", gb: "" }])}>
+                <Plus className="h-3.5 w-3.5" /> Add Card
+              </Button>
+            </div>
+            <div className="flex flex-col gap-2">
+              {cards.map((c, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input placeholder="Card #1 (e.g. SD-04)" value={c.label} onChange={(e) => updateCard(i, "label", e.target.value)} />
+                  <Input className="w-24" placeholder="GB" value={c.gb} onChange={(e) => updateCard(i, "gb", e.target.value)} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <Label>Main Storage</Label>
+            <Input placeholder="Drive #1 (e.g. WD-001)" value={mainStorage} onChange={(e) => setMainStorage(e.target.value)} />
+          </div>
+          <div>
+            <Label>Backup Storage</Label>
+            <Input placeholder="Backup #1 (e.g. SEA-002)" value={backupStorage} onChange={(e) => setBackupStorage(e.target.value)} />
+          </div>
+          <div>
+            <Label>Copied By</Label>
+            <Input placeholder="Name of person who copied the data" value={copiedBy} onChange={(e) => setCopiedBy(e.target.value)} />
+          </div>
+          <div>
+            <Label>Notes — optional</Label>
+            <Textarea placeholder="e.g. Card was formatted early — recovered from backup." value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save Entry"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Storage list (shared by the Projects>Storage sub-tab and top Storage)   */
+/* ---------------------------------------------------------------------- */
+
+function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage }) {
+  if (events.length === 0) {
+    return <p className="text-sm text-muted-foreground">No events found.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      {events.map((ev) => {
+        const day = ev.eventStartDate ? new Date(ev.eventStartDate) : null;
+        const team = ev.team || [];
+        return (
+          <Card key={ev.id}>
+            <CardContent className="p-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-12 flex-col items-center justify-center rounded-md bg-muted text-center">
+                    <span className="text-[10px] font-medium uppercase text-muted-foreground">
+                      {day ? day.toLocaleDateString("en-IN", { month: "short" }) : "—"}
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">{day ? day.getDate() : "—"}</span>
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">{ev.eventName}</p>
+                    <p className="text-xs text-muted-foreground">{ev.projectName}{ev.clientName ? ` · ${ev.clientName}` : ""}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  {team.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No team assigned</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {team.filter((m) => entriesByKey.has(`${ev.id}_${m.uid}`)).length}/{team.length} received
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {team.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No team members assigned. Assign team via the Events tab to enable storage logging for this event.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {team.map((m) => {
+                    const entry = entriesByKey.get(`${ev.id}_${m.uid}`);
+                    return (
+                      <div key={m.uid} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <AvatarInitials name={m.name} size="sm" className="h-6 w-6 text-[10px]" />
+                          <span className="text-sm text-foreground">{m.name}</span>
+                          <span className="text-xs text-muted-foreground">{m.role}</span>
+                          {!entry && <span className="text-xs text-rose-600">— not received yet</span>}
+                        </div>
+                        {entry ? (
+                          <button
+                            type="button"
+                            className="text-xs text-emerald-700 underline-offset-2 hover:underline"
+                            onClick={() => onViewStorage(ev, m, entry)}
+                          >
+                            {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""}
+                          </button>
+                        ) : (
+                          <Button size="sm" variant="secondary" onClick={() => onLogStorage(ev, m)}>
+                            + Log Storage
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Deliverables table (per project)                                        */
+/* ---------------------------------------------------------------------- */
+
+function DeliverablesTable({ deliverables, isAdminView, onEdit, onDelete, showProject = false, rowsClickable = isAdminView }) {
+  const pending = deliverables.filter((d) => d.status === "Pending");
+  const inProgress = deliverables.filter((d) => d.status === "In Progress");
+  const done = deliverables.filter((d) => d.status === "Done");
+  const ordered = [...pending, ...inProgress, ...done];
+
+  return (
+    <Card>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {showProject && <TableHead>Project</TableHead>}
+            <TableHead>Deliverable</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Assigned To</TableHead>
+            <TableHead>Start</TableHead>
+            <TableHead>End</TableHead>
+            <TableHead>Deadline</TableHead>
+            {isAdminView && <TableHead className="text-right">Actions</TableHead>}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {ordered.map((d) => (
+            <TableRow key={d.id} className={rowsClickable ? "cursor-pointer" : ""} onClick={() => rowsClickable && onEdit(d)}>
+              {showProject && (
+                <TableCell className="text-muted-foreground">{d.projectName || "—"}</TableCell>
+              )}
+              <TableCell className="font-medium text-foreground">
+                <div className="flex items-center gap-1.5">
+                  {d.type}
+                  {d.instructions && (
+                    <span title="Has instructions for assignee">
+                      <FileText className="h-3 w-3 text-amber-600" />
+                    </span>
+                  )}
+                  {(d.updates || []).length > 0 && (
+                    <span className="inline-flex items-center gap-0.5 text-xs font-normal text-muted-foreground">
+                      <MessageSquare className="h-3 w-3" />
+                      {d.updates.length}
+                    </span>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell><StatusBadge status={d.status === "Done" ? "Completed" : d.status}>{d.status}</StatusBadge></TableCell>
+              <TableCell className="text-muted-foreground">{d.assignedName || "Unassigned"}</TableCell>
+              <TableCell className="text-muted-foreground">{fmtDate(d.startDate)}</TableCell>
+              <TableCell className="text-muted-foreground">{fmtDate(d.endDate)}</TableCell>
+              <TableCell className="text-muted-foreground">{fmtDate(d.deadline)}</TableCell>
+              {isAdminView && (
+                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex justify-end gap-1">
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onEdit(d)}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => onDelete(d)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </TableCell>
+              )}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Main content                                                            */
+/* ---------------------------------------------------------------------- */
+
 function PostProductionContent() {
   const { user } = useAuth();
   const isAdminView = ADMIN_ROLES.includes(user.role);
-  const searchParams = useSearchParams();
-  const linkedProjectId = searchParams.get("projectId") || "";
 
-  const [tasks, setTasks] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [projects, setProjects] = useState([]);
+  const [mainTab, setMainTab] = useState("overview"); // overview | projects | storage
+  const [projectSubTab, setProjectSubTab] = useState("deliverables"); // deliverables | storage
+  const fyOptions = useMemo(() => getFinancialYearOptions(), []);
+  const [fy, setFy] = useState(fyOptions[0].value);
+
   const [loading, setLoading] = useState(true);
-  const [newTaskOpen, setNewTaskOpen] = useState(false);
-  const [activeTask, setActiveTask] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [allDeliverables, setAllDeliverables] = useState([]);
+  const [allStorageEntries, setAllStorageEntries] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [myDeliverables, setMyDeliverables] = useState([]);
+  const [myStorageEntries, setMyStorageEntries] = useState([]);
+  const [myEvents, setMyEvents] = useState([]);
 
-  const [filterAssignee, setFilterAssignee] = useState("all");
-  const [filterProject, setFilterProject] = useState(linkedProjectId || "all");
-  const [filterPriority, setFilterPriority] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  // Completed tasks accumulate forever (nothing ever archives/deletes them),
-  // so the admin table hides them by default once there's a backlog —
-  // toggle back on, or filter status to "Completed" directly, to see them.
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [projectDeliverables, setProjectDeliverables] = useState([]);
+  const [projectEvents, setProjectEvents] = useState([]);
 
-  async function loadData() {
+  const [editingDeliverable, setEditingDeliverable] = useState(null);
+  const [editingMyDeliverable, setEditingMyDeliverable] = useState(null);
+  const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
+  const [storageContext, setStorageContext] = useState(null);
+
+  async function loadOrgData() {
+    // Non-admin employees don't have list access to org-wide projects/events
+    // under firestore.rules (isProjectOps()/isHR() only), so the admin
+    // dashboard queries below (getAllProjects/getAllEvents/etc.) are
+    // skipped for them. They still get their own assigned deliverables via
+    // a collectionGroup query scoped to assignedUid == them, which is
+    // allowed under firestore.rules independent of project list access.
+    if (!isAdminView) {
+      setLoading(true);
+      try {
+        const [mine, myStorage, evs] = await Promise.all([
+          getDeliverablesForEmployee(user.uid),
+          getStorageEntriesForEmployee(user.uid),
+          getEventsForEmployee(user.uid),
+        ]);
+        setMyDeliverables(mine || []);
+        setMyStorageEntries(myStorage || []);
+        setMyEvents(evs || []);
+      } catch (err) {
+        console.error("Failed to load your deliverables:", err);
+        toast.error(err.message || "Failed to load your deliverables");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     setLoading(true);
     try {
-      const [taskList, emps, projs] = await Promise.all([
-        isAdminView ? getAllTasks() : getTasksForEmployee(user.uid),
-        isAdminView ? getAllEmployees() : Promise.resolve([]),
-        isAdminView ? getAllProjects() : Promise.resolve([]),
+      const [projs, evs, emps, frees] = await Promise.all([
+        getAllProjects(),
+        getAllEvents(),
+        getAllEmployees(),
+        getAllFreelancers(),
       ]);
-      setTasks(taskList);
-      setEmployees((emps || []).filter((e) => e.status === "active"));
       setProjects(projs || []);
+      setEvents(evs || []);
+      const employeePeople = (emps || [])
+        .filter((e) => e.status === "active")
+        .map((e) => ({ uid: e.uid, name: e.name, role: e.role, isFreelancer: false }));
+      const freelancerPeople = (frees || [])
+        .filter((f) => f.status === "active")
+        .map((f) => ({ uid: f.id, name: f.name, role: f.skill, isFreelancer: true }));
+      setPeople([...employeePeople, ...freelancerPeople]);
+
+      const [dels, entries] = await Promise.all([
+        getAllDeliverables(projs || []),
+        getAllStorageEntries(),
+      ]);
+      setAllDeliverables(dels);
+      setAllStorageEntries(entries);
     } catch (err) {
       console.error("Failed to load post-production data:", err);
-      toast.error(err.message || "Failed to load tasks");
+      toast.error(err.message || "Failed to load post-production data");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadData();
+    loadOrgData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.uid, isAdminView]);
 
-  function refreshActiveTask(updatedList) {
-    if (activeTask) {
-      const fresh = updatedList.find((t) => t.id === activeTask.id);
-      setActiveTask(fresh || null);
-    }
-  }
-
-  async function handleChanged() {
-    await loadData();
+  async function loadProject(projectId) {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+    const [dels, evs] = await Promise.all([
+      ensureDeliverablesForProject(project),
+      getEventsForProject(projectId),
+    ]);
+    setProjectDeliverables(dels);
+    setProjectEvents(evs);
   }
 
   useEffect(() => {
-    if (activeTask) refreshActiveTask(tasks);
+    if (selectedProjectId) loadProject(selectedProjectId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [selectedProjectId, projects]);
 
-  const filteredTasks = useMemo(() => {
-    return tasks.filter((t) => {
-      const assigneeUids = t.assignedUids?.length ? t.assignedUids : [t.assignedUid].filter(Boolean);
-      if (isAdminView && filterAssignee !== "all" && !assigneeUids.includes(filterAssignee)) return false;
-      if (isAdminView && filterProject !== "all" && t.projectId !== filterProject) return false;
-      if (filterStatus !== "all" && t.status !== filterStatus) return false;
-      // Only apply the hide-completed default when no explicit status filter
-      // is set — picking "Completed" in the dropdown should still show them.
-      if (isAdminView && !showCompleted && filterStatus === "all" && t.status === "Completed") return false;
-      if (filterPriority !== "all" && t.priority !== filterPriority) return false;
-      if (searchTerm.trim()) {
-        const term = searchTerm.trim().toLowerCase();
-        const assigneeNames = (t.assignedNames?.length ? t.assignedNames : [t.assignedName]).filter(Boolean).join(" ");
-        const haystack = `${t.title} ${t.description || ""} ${t.projectName || ""} ${assigneeNames}`.toLowerCase();
-        if (!haystack.includes(term)) return false;
-      }
-      return true;
-    });
-  }, [tasks, filterAssignee, filterProject, filterPriority, filterStatus, searchTerm, isAdminView, showCompleted]);
+  // FY-scoped projects: a project is "in range" if any of its events fall
+  // inside the selected financial year (falls back to including projects
+  // with no dated events yet, so brand-new projects aren't hidden).
+  const fyRange = fyOptions.find((o) => o.value === fy);
+  const eventsInFy = useMemo(
+    () => events.filter((e) => e.eventStartDate && e.eventStartDate >= fyRange.startDate && e.eventStartDate <= fyRange.endDate),
+    [events, fyRange]
+  );
+  const projectIdsInFy = useMemo(() => new Set(eventsInFy.map((e) => e.projectId)), [eventsInFy]);
+  const projectsInFy = useMemo(
+    () => projects.filter((p) => projectIdsInFy.has(p.id) || !events.some((e) => e.projectId === p.id)),
+    [projects, projectIdsInFy, events]
+  );
 
-  const completedCount = tasks.filter((t) => t.status === "Completed").length;
+  const deliverablesInFy = useMemo(
+    () => allDeliverables.filter((d) => projectsInFy.some((p) => p.id === d.projectId)),
+    [allDeliverables, projectsInFy]
+  );
 
-  // Employee list view: unfinished work first (pipeline order), then most urgent due date.
-  const sortedForList = useMemo(() => {
-    const order = TASK_STATUSES.reduce((acc, s, i) => ({ ...acc, [s]: i }), {});
-    return [...filteredTasks].sort((a, b) => {
-      const statusDiff = (order[a.status] ?? 0) - (order[b.status] ?? 0);
-      if (statusDiff !== 0) return statusDiff;
-      if (!a.dueDate && !b.dueDate) return 0;
-      if (!a.dueDate) return 1;
-      if (!b.dueDate) return -1;
-      return a.dueDate.localeCompare(b.dueDate);
-    });
-  }, [filteredTasks]);
-
-  const columns = TASK_STATUSES.map((status) => ({
-    status,
-    items: filteredTasks.filter((t) => t.status === status),
-  }));
-  // Quick per-status counts for the admin summary strip (computed from the
-  // full task list, not filteredTasks, so they stay stable while filtering/
-  // searching — a dashboard-style overview rather than a filtered count).
-  const statusCounts = TASK_STATUSES.reduce(
-    (acc, s) => ({ ...acc, [s]: tasks.filter((t) => t.status === s).length }),
+  const statusCounts = DELIVERABLE_STATUSES.reduce(
+    (acc, s) => ({ ...acc, [s]: deliverablesInFy.filter((d) => d.status === s).length }),
     {}
   );
 
-  const overdueCount = tasks.filter((t) => isOverdue(t)).length;
+  const byType = DELIVERABLE_TYPES.map((type) => {
+    const rows = deliverablesInFy.filter((d) => d.type === type);
+    return {
+      type,
+      total: rows.length,
+      pending: rows.filter((d) => d.status === "Pending").length,
+      inProgress: rows.filter((d) => d.status === "In Progress").length,
+      done: rows.filter((d) => d.status === "Done").length,
+    };
+  });
+
+  const entriesByKey = useMemo(() => {
+    const m = new Map();
+    allStorageEntries.forEach((entry) => m.set(`${entry.eventId}_${entry.memberUid}`, entry));
+    return m;
+  }, [allStorageEntries]);
+
+  const storageStats = useMemo(() => {
+    let allReceived = 0, partial = 0, missing = 0;
+    let missingCount = 0;
+    eventsInFy.forEach((ev) => {
+      const team = ev.team || [];
+      if (team.length === 0) return;
+      const receivedCount = team.filter((m) => entriesByKey.has(`${ev.id}_${m.uid}`)).length;
+      if (receivedCount === team.length) allReceived += 1;
+      else if (receivedCount > 0) partial += 1;
+      else missing += 1;
+      missingCount += team.length - receivedCount;
+    });
+    return { totalEvents: eventsInFy.length, allReceived, partial, missing, missingCount };
+  }, [eventsInFy, entriesByKey]);
+
+  const openDeliverables = deliverablesInFy.filter((d) => d.status !== "Done");
+
+  const pieData = DELIVERABLE_STATUSES.map((s) => ({ name: s, value: statusCounts[s] })).filter((d) => d.value > 0);
+
+  const filteredProjects = projects.filter((p) =>
+    !projectSearch.trim() || p.projectName.toLowerCase().includes(projectSearch.trim().toLowerCase())
+  );
+  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  async function handleDeliverableSaved() {
+    if (selectedProjectId) await loadProject(selectedProjectId);
+    if (isAdminView) await loadOrgData();
+  }
+
+  async function handleDeleteDeliverable(d) {
+    if (!confirm(`Remove "${d.type}"?`)) return;
+    try {
+      await deleteDeliverable(d.projectId, d.id);
+      toast.success("Deliverable removed");
+      handleDeliverableSaved();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
+  async function handleStorageSaved() {
+    if (selectedProjectId) await loadProject(selectedProjectId);
+    if (isAdminView) await loadOrgData();
+  }
+
+  if (!isAdminView) {
+    async function refreshMine() {
+      setLoading(true);
+      try {
+        const [mine, myStorage, evs] = await Promise.all([
+          getDeliverablesForEmployee(user.uid),
+          getStorageEntriesForEmployee(user.uid),
+          getEventsForEmployee(user.uid),
+        ]);
+        setMyDeliverables(mine || []);
+        setMyStorageEntries(myStorage || []);
+        setMyEvents(evs || []);
+      } catch (err) {
+        console.error("Failed to reload your data:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    const myEntriesByKey = new Map();
+    myStorageEntries.forEach((entry) => myEntriesByKey.set(`${entry.eventId}_${entry.memberUid}`, entry));
+
+    return (
+      <AppShell>
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Post-Production</h2>
+          <p className="text-sm text-muted-foreground">Tap a deliverable to update its status or add a note.</p>
+        </div>
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <div className="flex flex-col gap-8">
+            <div>
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Your deliverables</h3>
+              {myDeliverables.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No deliverables assigned to you yet.</p>
+              ) : (
+                <DeliverablesTable
+                  deliverables={myDeliverables}
+                  isAdminView={false}
+                  rowsClickable
+                  onEdit={setEditingMyDeliverable}
+                  onDelete={() => {}}
+                  showProject
+                />
+              )}
+            </div>
+
+            <div>
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Your storage log</h3>
+              <p className="mb-3 text-xs text-muted-foreground">One entry per event — log it once your cards/backups are handed off.</p>
+              <MyStorageLogList
+                events={myEvents}
+                user={user}
+                entriesByKey={myEntriesByKey}
+                onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
+                onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
+              />
+            </div>
+          </div>
+        )}
+        <EmployeeDeliverableDialog
+          open={!!editingMyDeliverable}
+          onOpenChange={(v) => !v && setEditingMyDeliverable(null)}
+          deliverable={editingMyDeliverable}
+          onSaved={refreshMine}
+        />
+        <StorageEntryDialog
+          open={!!storageContext}
+          onOpenChange={(open) => !open && setStorageContext(null)}
+          context={storageContext}
+          currentUid={user.uid}
+          currentName={user.name}
+          onSaved={refreshMine}
+        />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Post-Production</h2>
-          <p className="text-sm text-muted-foreground">
-            {isAdminView
-              ? "Assign editing, culling, and delivery work across the team."
-              : "Your assigned post-production tasks."}
-          </p>
+          <p className="text-sm text-muted-foreground">Deliverables and storage handoff, across every project.</p>
         </div>
-        {isAdminView && (
-          <Button onClick={() => setNewTaskOpen(true)}>
-            <Plus className="h-4 w-4" /> New Task
-          </Button>
-        )}
-      </div>
-
-      {overdueCount > 0 && (
-        <Card className="mb-4 border-destructive/30 bg-destructive/5">
-          <CardContent className="flex items-center gap-2 p-3 text-sm text-destructive">
-            <CalendarClock className="h-4 w-4" />
-            {overdueCount} task{overdueCount > 1 ? "s" : ""} past due date
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Input
-          placeholder="Search tasks..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full max-w-xs"
-        />
-        {isAdminView && (
-          <Select value={filterAssignee} onValueChange={setFilterAssignee}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Assignee">
-                {(v) => (v === "all" ? "All Employees" : employees.find((e) => e.uid === v)?.name || "Assignee")}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Employees</SelectItem>
-              {employees.map((e) => (
-                <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {isAdminView && (
-          <Select value={filterProject} onValueChange={setFilterProject}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Project">
-                {(v) => (v === "all" ? "All Projects" : projects.find((p) => p.id === v)?.projectName || "Project")}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Projects</SelectItem>
-              {projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.projectName}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {!isAdminView && (
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Status">
-                {(v) => (v === "all" ? "All Statuses" : v)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              {TASK_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>{s}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        <Select value={filterPriority} onValueChange={setFilterPriority}>
+        <Select value={fy} onValueChange={setFy}>
           <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="Priority">
-              {(v) => (v === "all" ? "All Priorities" : v)}
-            </SelectValue>
+            <SelectValue>{(v) => fyOptions.find((o) => o.value === v)?.label}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Priorities</SelectItem>
-            {TASK_PRIORITIES.map((p) => (
-              <SelectItem key={p} value={p}>{p}</SelectItem>
+            {fyOptions.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
-        {isAdminView && (
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Status">
-                {(v) => (v === "all" ? "All Statuses" : v)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              {TASK_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>{s}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {isAdminView && (
-          <label className="flex items-center gap-2 pl-1 text-sm text-muted-foreground">
-            <Checkbox checked={showCompleted} onCheckedChange={(v) => setShowCompleted(!!v)} />
-            Show completed ({completedCount})
-          </label>
-        )}
       </div>
 
-      {isAdminView && (
-        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {TASK_STATUSES.map((s) => (
-            <button
-              key={s}
-              onClick={() => setFilterStatus(filterStatus === s ? "all" : s)}
-              className={`rounded-md border p-2.5 text-left transition-colors ${
-                filterStatus === s ? "border-accent bg-accent/10" : "border-border hover:bg-muted"
-              }`}
-            >
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{s}</p>
-              <p className="text-lg font-semibold text-foreground">{statusCounts[s]}</p>
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="mb-6 flex gap-2">
+        <Button variant={mainTab === "overview" ? "default" : "secondary"} onClick={() => setMainTab("overview")}>
+          <BarChart3 className="h-4 w-4" /> Overview
+        </Button>
+        <Button variant={mainTab === "projects" ? "default" : "secondary"} onClick={() => setMainTab("projects")}>
+          <Layers className="h-4 w-4" /> Projects
+        </Button>
+        <Button variant={mainTab === "storage" ? "default" : "secondary"} onClick={() => setMainTab("storage")}>
+          <HardDrive className="h-4 w-4" /> Storage
+        </Button>
+      </div>
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
-      ) : filteredTasks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {isAdminView && !showCompleted && filterStatus === "all" && completedCount > 0 && tasks.length === completedCount
-            ? "All tasks are completed — check \"Show completed\" to see them."
-            : "No post-production tasks found."}
-        </p>
-      ) : isAdminView ? (
-        <Card>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Task</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Assignee</TableHead>
-                <TableHead>Priority</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Due</TableHead>
-                <TableHead className="text-right">Comments</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sortedForList.map((task) => (
-                <TableRow
-                  key={task.id}
-                  className="cursor-pointer"
-                  onClick={() => setActiveTask(task)}
-                >
-                  <TableCell>
-                    <p className="font-medium text-foreground">{task.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {task.taskType}
-                      {task.eventName ? ` · ${task.eventName}` : ""}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{task.projectName || "—"}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1.5">
-                      <AvatarInitials name={task.assignedName} size="sm" className="h-6 w-6 text-[10px]" />
-                      <span className="text-sm">
-                        {(task.assignedNames?.length ? task.assignedNames : [task.assignedName]).filter(Boolean).join(", ")}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell><StatusBadge status={task.priority} /></TableCell>
-                  <TableCell><StatusBadge status={task.status} /></TableCell>
-                  <TableCell>
-                    {task.dueDate ? (
-                      <span className={isOverdue(task) ? "font-medium text-destructive" : "text-muted-foreground"}>
-                        {task.dueDate}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right text-muted-foreground">
-                    {(task.comments || []).length > 0 ? (
-                      <span className="inline-flex items-center gap-1">
-                        <MessageSquare className="h-3 w-3" /> {task.comments.length}
-                      </span>
-                    ) : (
-                      "—"
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      ) : (
-        // Employee view: a single stacked list rather than five mostly-empty
-        // columns — most people only have a handful of tasks at once.
-        <div className="flex flex-col gap-2">
-          {sortedForList.map((task) => (
-            <Card
-              key={task.id}
-              className="cursor-pointer transition-colors hover:border-accent/50"
-              onClick={() => setActiveTask(task)}
-            >
-              <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium text-foreground">{task.title}</p>
-                    <StatusBadge status={task.status} />
-                    <StatusBadge status={task.priority} />
+      ) : mainTab === "overview" ? (
+        <div className="flex flex-col gap-6">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Projects</p><p className="mt-1 text-3xl font-semibold text-foreground">{projectsInFy.length}</p><p className="text-xs text-muted-foreground">in selected range</p></CardContent></Card>
+            <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Total Deliverables</p><p className="mt-1 text-3xl font-semibold text-foreground">{deliverablesInFy.length}</p><p className="text-xs text-muted-foreground">across all projects</p></CardContent></Card>
+            <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Pending / In Progress</p><p className="mt-1 text-3xl font-semibold text-amber-600">{statusCounts.Pending + statusCounts["In Progress"]}</p><p className="text-xs text-muted-foreground">{statusCounts.Pending} pending · {statusCounts["In Progress"]} in progress</p></CardContent></Card>
+            <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Done</p><p className="mt-1 text-3xl font-semibold text-emerald-600">{statusCounts.Done}</p><p className="text-xs text-muted-foreground">{deliverablesInFy.length ? Math.round((statusCounts.Done / deliverablesInFy.length) * 100) : 0}% complete</p></CardContent></Card>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardContent className="p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">In the pipeline</p>
+                <p className="mb-3 text-lg font-semibold text-foreground">Who&apos;s doing what</p>
+                {openDeliverables.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No open deliverables. Everything in this period is delivered.</p>
+                ) : (
+                  <div className="max-h-96 overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Client</TableHead>
+                          <TableHead>Deliverable</TableHead>
+                          <TableHead>Assigned To</TableHead>
+                          <TableHead>Deadline</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {openDeliverables.map((d) => (
+                          <TableRow key={d.id}>
+                            <TableCell className="text-foreground">{d.clientName || d.projectName}</TableCell>
+                            <TableCell className="text-muted-foreground">{d.type}</TableCell>
+                            <TableCell className={d.assignedName ? "text-foreground" : "text-muted-foreground"}>{d.assignedName || "Unassigned"}</TableCell>
+                            <TableCell className="text-muted-foreground">{fmtDate(d.deadline)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {task.taskType}
-                    {task.projectName ? ` · ${task.projectName}` : ""}
-                    {task.eventName ? ` · ${task.eventName}` : ""}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  {(task.comments || []).length > 0 && (
-                    <span className="flex items-center gap-1">
-                      <MessageSquare className="h-3 w-3" /> {task.comments.length}
-                    </span>
-                  )}
-                  {task.dueDate && (
-                    <span className={isOverdue(task) ? "font-medium text-destructive" : ""}>
-                      Due {task.dueDate}
-                    </span>
-                  )}
-                </div>
+                )}
               </CardContent>
             </Card>
-          ))}
+
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</p>
+                <p className="mb-2 text-lg font-semibold text-foreground">Split</p>
+                {deliverablesInFy.length === 0 ? (
+                  <p className="py-10 text-center text-sm text-muted-foreground">No deliverables yet</p>
+                ) : (
+                  <>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <PieChart>
+                        <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={75} paddingAngle={2}>
+                          {pieData.map((entry, i) => (
+                            <Cell key={i} fill={STATUS_COLORS[entry.name]} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="mt-2 flex flex-col gap-1.5 text-sm">
+                      {DELIVERABLE_STATUSES.map((s) => (
+                        <div key={s} className="flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 text-muted-foreground">
+                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATUS_COLORS[s] }} />
+                            {s}
+                          </span>
+                          <span className="font-medium text-foreground">{statusCounts[s]}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Storage</p>
+              <p className="mb-3 text-lg font-semibold text-foreground">What has come in</p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Card><CardContent className="p-4 text-center"><p className="text-3xl font-semibold text-foreground">{storageStats.totalEvents}</p><p className="text-xs text-muted-foreground">Total Events</p></CardContent></Card>
+                <Card><CardContent className="p-4 text-center"><p className="text-3xl font-semibold text-emerald-600">{storageStats.allReceived}</p><p className="text-xs text-muted-foreground">All Received ✓</p></CardContent></Card>
+                <Card><CardContent className="p-4 text-center"><p className="text-3xl font-semibold text-amber-600">{storageStats.partial}</p><p className="text-xs text-muted-foreground">Partially Done</p></CardContent></Card>
+                <Card><CardContent className="p-4 text-center"><p className="text-3xl font-semibold text-rose-600">{storageStats.missing}</p><p className="text-xs text-muted-foreground">Missing Entries</p></CardContent></Card>
+              </div>
+              {storageStats.missingCount > 0 && (
+                <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  {storageStats.missingCount} storage {storageStats.missingCount === 1 ? "entry is" : "entries are"} still pending from team members.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Deliverables</p>
+              <p className="mb-3 text-lg font-semibold text-foreground">Where the work stands</p>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right text-amber-600">Pending</TableHead>
+                    <TableHead className="text-right">In Progress</TableHead>
+                    <TableHead className="text-right">Done</TableHead>
+                    <TableHead className="text-right">% Done</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {byType.map((r) => (
+                    <TableRow key={r.type}>
+                      <TableCell className="font-medium text-foreground">{r.type}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{r.total || "—"}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{r.total ? r.pending : "—"}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{r.total ? r.inProgress : "—"}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{r.total ? r.done : "—"}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${r.total ? Math.round((r.done / r.total) * 100) : 0}%` }} />
+                          </div>
+                          <span className="w-9 text-xs text-muted-foreground">{r.total ? Math.round((r.done / r.total) * 100) : 0}%</span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow>
+                    <TableCell className="font-semibold text-foreground">Total</TableCell>
+                    <TableCell className="text-right font-semibold text-foreground">{deliverablesInFy.length}</TableCell>
+                    <TableCell className="text-right font-semibold text-foreground">{statusCounts.Pending}</TableCell>
+                    <TableCell className="text-right font-semibold text-foreground">{statusCounts["In Progress"]}</TableCell>
+                    <TableCell className="text-right font-semibold text-foreground">{statusCounts.Done}</TableCell>
+                    <TableCell />
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </div>
+      ) : mainTab === "projects" ? (
+        <div className="grid gap-4 md:grid-cols-[280px_1fr]">
+          <div>
+            <div className="relative mb-3">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-8" placeholder="Search projects..." value={projectSearch} onChange={(e) => setProjectSearch(e.target.value)} />
+            </div>
+            <p className="mb-2 text-xs text-muted-foreground">{filteredProjects.length} project{filteredProjects.length === 1 ? "" : "s"}</p>
+            <div className="flex flex-col gap-1">
+              {filteredProjects.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => { setSelectedProjectId(p.id); setProjectSubTab("deliverables"); }}
+                  className={`rounded-md border p-3 text-left transition-colors ${
+                    selectedProjectId === p.id ? "border-accent bg-accent/10" : "border-border hover:bg-muted"
+                  }`}
+                >
+                  <p className="text-sm font-medium text-foreground">{p.projectName}</p>
+                  <p className="text-xs text-muted-foreground">{p.eventDate ? fmtDate(p.eventDate) : p.clientName}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            {!selectedProject ? (
+              <p className="text-sm text-muted-foreground">Select a project to view its deliverables and storage log.</p>
+            ) : (
+              <>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-lg font-semibold text-foreground">{selectedProject.projectName}</p>
+                    <p className="text-xs text-muted-foreground">{projectEvents.length} event{projectEvents.length === 1 ? "" : "s"}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant={projectSubTab === "storage" ? "default" : "secondary"} size="sm" onClick={() => setProjectSubTab("storage")}>
+                      Storage
+                    </Button>
+                    <Button variant={projectSubTab === "deliverables" ? "default" : "secondary"} size="sm" onClick={() => setProjectSubTab("deliverables")}>
+                      Deliverables ({projectDeliverables.length})
+                    </Button>
+                  </div>
+                </div>
+
+                {projectSubTab === "deliverables" ? (
+                  <>
+                    <div className="mb-3 flex justify-end">
+                      <Button size="sm" onClick={() => setAddDeliverableOpen(true)}>
+                        <Plus className="h-4 w-4" /> Add Deliverable
+                      </Button>
+                    </div>
+                    <DeliverablesTable
+                      deliverables={projectDeliverables}
+                      isAdminView={isAdminView}
+                      onEdit={setEditingDeliverable}
+                      onDelete={handleDeleteDeliverable}
+                    />
+                  </>
+                ) : (
+                  <StorageEventList
+                    events={projectEvents}
+                    entriesByKey={entriesByKey}
+                    onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
+                    onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <StorageEventList
+          events={eventsInFy}
+          entriesByKey={entriesByKey}
+          onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
+          onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
+        />
       )}
 
-      <NewTaskDialog
-        open={newTaskOpen}
-        onOpenChange={setNewTaskOpen}
-        employees={employees}
-        projects={projects}
-        onCreated={loadData}
-        createdByUid={user.uid}
-        createdByName={user.name}
-        initialProjectId={linkedProjectId}
+      <DeliverableDialog
+        open={!!editingDeliverable}
+        onOpenChange={(open) => !open && setEditingDeliverable(null)}
+        deliverable={editingDeliverable}
+        people={people}
+        onSaved={handleDeliverableSaved}
       />
-
-      <TaskDetailDialog
-        task={activeTask}
-        open={!!activeTask}
-        onOpenChange={(open) => !open && setActiveTask(null)}
-        isAdminView={isAdminView}
-        employees={employees}
+      <AddDeliverableDialog
+        open={addDeliverableOpen}
+        onOpenChange={setAddDeliverableOpen}
+        project={selectedProject}
+        onAdded={handleDeliverableSaved}
+      />
+      <StorageEntryDialog
+        open={!!storageContext}
+        onOpenChange={(open) => !open && setStorageContext(null)}
+        context={storageContext}
         currentUid={user.uid}
         currentName={user.name}
-        onChanged={handleChanged}
+        onSaved={handleStorageSaved}
       />
     </AppShell>
   );

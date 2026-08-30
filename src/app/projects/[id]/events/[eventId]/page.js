@@ -44,8 +44,9 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
+import AvatarInitials from "@/components/ui/avatar-initials";
 import { toast } from "sonner";
-import { ArrowLeft, AlertTriangle, X, Trash2, Users2 } from "lucide-react";
+import { ArrowLeft, AlertTriangle, X, Trash2, Users2, CalendarDays, MessageSquare, Banknote } from "lucide-react";
 
 const SHOOT_ROLES = ["photographer", "videographer", "editor", "data_manager"];
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
@@ -69,6 +70,8 @@ function EventDetailContent() {
   const [selectedKey, setSelectedKey] = useState("");
   const [assignNote, setAssignNote] = useState("");
   const [assignDayRate, setAssignDayRate] = useState("");
+  const [assignCost, setAssignCost] = useState("");
+  const [assignCostLabel, setAssignCostLabel] = useState("Full Day");
   const [savingTeam, setSavingTeam] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -159,9 +162,12 @@ function EventDetailContent() {
     if (kind === "freelancer") {
       const fl = freelancers.find((f) => f.id === selId);
       setAssignDayRate(fl?.dayRate ? String(fl.dayRate) : "");
+      setAssignCost(fl?.dayRate ? String(fl.dayRate) : "");
     } else {
       setAssignDayRate("");
+      setAssignCost("");
     }
+    setAssignCostLabel("Full Day");
   }, [selectedKey, freelancers]);
 
   async function handleSaveDetails(e) {
@@ -227,6 +233,11 @@ function EventDetailContent() {
           // what the Expenses payout suggestion uses, falling back to the
           // freelancer's profile dayRate only if this wasn't set.
           dayRate: Number(assignDayRate) || fl.dayRate || 0,
+          // Cost + label used for the project's Team Cost / Net Profit rollup
+          // (e.g. "Full Day ₹10,000"). Independent of dayRate so it can be
+          // set for employees too, not just freelancers.
+          cost: Number(assignCost) || 0,
+          costLabel: assignCostLabel || "Full Day",
           assignments: trimmedNote
             ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
             : [],
@@ -239,6 +250,8 @@ function EventDetailContent() {
           role: emp.role,
           type: "employee",
           sourceTeamId: null, // individually added, distinct from a bulk team-assign
+          cost: Number(assignCost) || 0,
+          costLabel: assignCostLabel || "Full Day",
           assignments: trimmedNote
             ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
             : [],
@@ -263,6 +276,8 @@ function EventDetailContent() {
       setSelectedKey("");
       setAssignNote("");
       setAssignDayRate("");
+      setAssignCost("");
+      setAssignCostLabel("Full Day");
       loadData();
     } catch (err) {
       toast.error(err.message);
@@ -336,19 +351,32 @@ function EventDetailContent() {
     <AppShell>
       <button
         onClick={() => router.push(`/projects/${projectId}`)}
-        className="mb-3 flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
+        className="mb-3 flex items-center gap-1 text-sm text-slate-500 transition-colors hover:text-slate-900"
       >
         <ArrowLeft className="h-4 w-4" /> Back to {event.projectName}
       </button>
 
-      <div className="sticky top-0 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white py-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">
-            {event.eventName}
-          </h2>
-          <p className="text-sm text-slate-500">{event.clientName}</p>
+      <div className="sticky top-0 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white/95 py-4 backdrop-blur supports-[backdrop-filter]:bg-white/80 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
+            <CalendarDays className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">
+              {event.eventName}
+            </h2>
+            <p className="text-sm text-slate-500">
+              {event.clientName}
+              {detailsShootDays > 0 && (
+                <span className="text-slate-400">
+                  {" "}
+                  · {detailsShootDays} shoot day{detailsShootDays !== 1 && "s"}
+                </span>
+              )}
+            </p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:pl-2">
           <StatusBadge status={event.status} />
           <Select value={event.status} onValueChange={handleStatusChange}>
             <SelectTrigger className="h-8 w-36 text-xs sm:w-40"><SelectValue /></SelectTrigger>
@@ -391,9 +419,12 @@ function EventDetailContent() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+        <Card className="overflow-hidden">
           <CardContent className="p-4 sm:p-5">
-            <h3 className="mb-3 font-medium text-slate-900">Event Details</h3>
+            <div className="mb-4 flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 text-slate-400" />
+              <h3 className="font-medium text-slate-900">Event Details</h3>
+            </div>
             <form onSubmit={handleSaveDetails} className="flex flex-col gap-3">
               <div>
                 <Label htmlFor="eventName">Event Name</Label>
@@ -440,10 +471,16 @@ function EventDetailContent() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="overflow-hidden">
           <CardContent className="p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-4 flex items-center gap-2">
+              <Users2 className="h-4 w-4 text-slate-400" />
               <h3 className="font-medium text-slate-900">Team Assignment</h3>
+              {(event.team || []).length > 0 && (
+                <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                  {event.team.length} assigned
+                </span>
+              )}
             </div>
 
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -497,21 +534,36 @@ function EventDetailContent() {
               />
             </div>
 
-            {selectedKind === "freelancer" && (
-              <div className="mb-3 max-w-[200px]">
-                <Label htmlFor="assignDayRate">Day rate for this assignment (₹)</Label>
-                <Input
-                  id="assignDayRate"
-                  type="number"
-                  min="0"
-                  placeholder="e.g. 3000"
-                  value={assignDayRate}
-                  onChange={(e) => setAssignDayRate(e.target.value)}
-                />
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Defaults to their profile rate — override here for a project-specific rate.
-                  This is what the Expenses payout suggestion will use.
-                </p>
+            {selectedKey && (
+              <div className="mb-3 flex flex-wrap gap-3">
+                <div className="w-32">
+                  <Label htmlFor="assignCostLabel">Rate type</Label>
+                  <Select value={assignCostLabel} onValueChange={setAssignCostLabel}>
+                    <SelectTrigger id="assignCostLabel">{assignCostLabel}</SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Full Day">Full Day</SelectItem>
+                      <SelectItem value="Half Day">Half Day</SelectItem>
+                      <SelectItem value="Fixed">Fixed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-40">
+                  <Label htmlFor="assignCost">Cost for this assignment (₹)</Label>
+                  <Input
+                    id="assignCost"
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 10000"
+                    value={assignCost}
+                    onChange={(e) => setAssignCost(e.target.value)}
+                  />
+                </div>
+                {selectedKind === "freelancer" && (
+                  <p className="w-full text-[11px] text-slate-500">
+                    Defaults to their profile day rate — override here for a project-specific rate.
+                    This also feeds the Expenses payout suggestion.
+                  </p>
+                )}
               </div>
             )}
 
@@ -526,29 +578,45 @@ function EventDetailContent() {
             )}
 
             {(event.team || []).length === 0 ? (
-              <p className="text-sm text-slate-500">No team members assigned yet.</p>
+              <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-slate-200 py-8 text-center">
+                <Users2 className="h-5 w-5 text-slate-300" />
+                <p className="text-sm text-slate-500">No team members assigned yet.</p>
+              </div>
             ) : (
-              <div className="grid max-h-56 gap-2 overflow-y-auto pr-1">
+              <div className="grid max-h-64 gap-2 overflow-y-auto pr-1">
                 {event.team.map((m) => {
                   const latestNote = (m.assignments || []).slice(-1)[0]?.text;
                   const teamName = m.sourceTeamId ? editorTeamsById[m.sourceTeamId] : null;
                   return (
                     <div
                       key={m.uid}
-                      className="flex flex-col gap-1 rounded-md border border-slate-200 p-2 text-sm"
+                      className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm transition-colors hover:border-slate-300"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1.5 truncate">
-                          {m.name}
-                           {/* — <span className="text-slate-500">{m.role}</span> */}
+                      <AvatarInitials name={m.name} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <span className="font-medium text-slate-900">{m.name}</span>
+                            {m.role && <span className="text-xs text-slate-400">{m.role}</span>}
+                          </span>
+                          <button
+                            onClick={() => handleRemoveMember(m.uid)}
+                            disabled={savingTeam}
+                            className="shrink-0 rounded-full p-1 hover:bg-red-50"
+                          >
+                            <X className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" />
+                          </button>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                           {m.type === "freelancer" && (
                             <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600">
                               Freelancer
                             </span>
                           )}
-                          {m.type === "freelancer" && m.dayRate > 0 && (
-                            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                              ₹{m.dayRate.toLocaleString("en-IN")}/day
+                          {m.cost > 0 && (
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                              <Banknote className="h-3 w-3" />
+                              {m.costLabel || "Full Day"} · ₹{m.cost.toLocaleString("en-IN")}
                             </span>
                           )}
                           {m.sourceTeamId ? (
@@ -560,22 +628,14 @@ function EventDetailContent() {
                               Individual
                             </span>
                           )}
-                        </span>
-                        <button onClick={() => handleRemoveMember(m.uid)} disabled={savingTeam} className="shrink-0">
-                          <X className="h-4 w-4 text-slate-400 hover:text-red-600" />
-                        </button>
+                        </div>
+                        {latestNote && <p className="mt-1.5 text-xs text-slate-500">{latestNote}</p>}
+                        {(m.assignments?.length || 0) > 1 && (
+                          <p className="mt-1 text-[11px] text-slate-400">
+                            +{m.assignments.length - 1} earlier instruction{m.assignments.length - 1 !== 1 && "s"}
+                          </p>
+                        )}
                       </div>
-                      {latestNote && <p className="text-xs text-slate-500">{latestNote}</p>}
-                      {(m.assignments?.length || 0) > 1 && (
-                        <p className="text-[11px] text-slate-400">
-                          +{m.assignments.length - 1} earlier instruction{m.assignments.length - 1 !== 1 && "s"}
-                        </p>
-                      )}
-                      {/* {m.sourceTeamId && (
-                        <p className="text-[11px] text-slate-400">
-                          Stays in sync with {teamName || "this team"} — removing them there removes them here too.
-                        </p>
-                      )} */}
                     </div>
                   );
                 })}
@@ -585,15 +645,21 @@ function EventDetailContent() {
         </Card>
       </div>
 
-      <Card className="mt-6">
+      <Card className="mt-6 overflow-hidden">
         <CardContent className="p-4 sm:p-5">
-          <h3 className="mb-1 font-medium text-slate-900">Team Updates</h3>
+          <div className="mb-1 flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-slate-400" />
+            <h3 className="font-medium text-slate-900">Team Updates</h3>
+          </div>
           <p className="mb-3 text-xs text-slate-500">
             Progress notes reported directly by team members assigned to this event.
           </p>
 
           {statusUpdates.filter((u) => (u.updates || []).length > 0).length === 0 ? (
-            <p className="text-sm text-slate-500">No updates from the team yet.</p>
+            <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-slate-200 py-8 text-center">
+              <MessageSquare className="h-5 w-5 text-slate-300" />
+              <p className="text-sm text-slate-500">No updates from the team yet.</p>
+            </div>
           ) : (
             <div className="grid max-h-72 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
               {statusUpdates
@@ -601,21 +667,24 @@ function EventDetailContent() {
                 .map((u) => {
                   const latest = u.updates[u.updates.length - 1];
                   return (
-                    <div key={u.uid} className="rounded-md border border-slate-200 p-3 text-sm">
-                      <div className="mb-1 flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
-                        <span className="font-medium text-slate-900">{u.name}</span>
-                        {latest?.updatedAt && (
-                          <span className="text-xs text-slate-400">
-                            {new Date(latest.updatedAt).toLocaleString()}
-                          </span>
+                    <div key={u.uid} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm">
+                      <AvatarInitials name={u.name} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="font-medium text-slate-900">{u.name}</span>
+                          {latest?.updatedAt && (
+                            <span className="text-xs text-slate-400">
+                              {new Date(latest.updatedAt).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-600">{latest?.text}</p>
+                        {u.updates.length > 1 && (
+                          <p className="mt-1 text-[11px] text-slate-400">
+                            +{u.updates.length - 1} earlier update{u.updates.length - 1 !== 1 && "s"}
+                          </p>
                         )}
                       </div>
-                      <p className="text-slate-600">{latest?.text}</p>
-                      {u.updates.length > 1 && (
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          +{u.updates.length - 1} earlier update{u.updates.length - 1 !== 1 && "s"}
-                        </p>
-                      )}
                     </div>
                   );
                 })}

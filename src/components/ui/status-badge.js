@@ -15,6 +15,7 @@ const STATUS_STYLES = {
   Paid: "bg-stone-200 text-stone-700",
   Sick: "bg-rose-100 text-rose-700",
   New: "bg-stone-100 text-stone-700",
+  "New Inquiry": "bg-sky-100 text-sky-800",
   Contacted: "bg-stone-200 text-stone-700",
   "Meeting Scheduled": "bg-amber-100 text-amber-800",
   Quoted: "bg-amber-100 text-amber-800",

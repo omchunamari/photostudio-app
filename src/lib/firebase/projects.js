@@ -18,7 +18,10 @@ export async function createProject(data, createdByUid) {
   const ref = await addDoc(collection(db, "projects"), {
     projectName: data.projectName,
     leadId: data.leadId,
-    quotationId: data.quotationId,
+    // Firestore's addDoc rejects any field whose value is `undefined`, so
+    // this must never be left as data.quotationId directly — always fall
+    // back to null when no quote was passed in.
+    quotationId: data.quotationId ?? null,
     clientName: data.clientName,
     eventDate: data.eventDate || null,
     shootDays: data.shootDays || 1,
@@ -53,6 +56,15 @@ export async function getAllProjects() {
 
 export async function getProjectByQuotationId(quotationId) {
   const q = query(collection(db, "projects"), where("quotationId", "==", quotationId));
+  const snap = await getDocs(q);
+  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+// "Convert to Project" on the lead is independent of any single quote's
+// status now (quotes just track draft/sent/accepted/declined/expired for
+// the client-facing side) — this looks up a project by lead directly.
+export async function getProjectByLeadId(leadId) {
+  const q = query(collection(db, "projects"), where("leadId", "==", leadId));
   const snap = await getDocs(q);
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 }

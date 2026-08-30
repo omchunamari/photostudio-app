@@ -14,14 +14,30 @@ import {
   deleteProject,
   setProjectLeader,
 } from "@/lib/firebase/projects";
-import { createEvent, getEventsForProject } from "@/lib/firebase/events";
+import { createEvent, getEventsForProject, sumEventTeamCost } from "@/lib/firebase/events";
 import { getAllEmployees } from "@/lib/firebase/employees";
+import {
+  getInvoicesForProject,
+  createInvoice,
+  setInvoiceStatus,
+  deleteInvoice,
+  getNextInvoiceNumber,
+  sumReceived,
+  INVOICE_STATUSES,
+} from "@/lib/firebase/invoices";
+import {
+  getExpensesForProject,
+  createExpense,
+  deleteExpense,
+  MANUAL_EXPENSE_CATEGORIES,
+} from "@/lib/firebase/expenses";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
 import { isEventPast } from "@/lib/status";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -53,6 +69,10 @@ import { ArrowLeft, Plus, Trash2, Crown } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
+function inr(n) {
+  return `₹${(Number(n) || 0).toLocaleString("en-IN")}`;
+}
+
 function ProjectDetailContent() {
   const { id } = useParams();
   const router = useRouter();
@@ -63,6 +83,8 @@ function ProjectDetailContent() {
   const [project, setProject] = useState(null);
   const [events, setEvents] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -78,6 +100,27 @@ function ProjectDetailContent() {
     eventName: "",
     eventStartDate: "",
     eventEndDate: "",
+  });
+
+  // --- Invoices ---
+  const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
+  const [savingInvoice, setSavingInvoice] = useState(false);
+  const [invoiceForm, setInvoiceForm] = useState({
+    invoiceNumber: "",
+    date: new Date().toISOString().slice(0, 10),
+    amount: "",
+    status: "unpaid",
+    note: "",
+  });
+
+  // --- Other Expenses ---
+  const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
+  const [savingExpense, setSavingExpense] = useState(false);
+  const [expenseForm, setExpenseForm] = useState({
+    category: MANUAL_EXPENSE_CATEGORIES[0],
+    amount: "",
+    description: "",
+    date: new Date().toISOString().slice(0, 10),
   });
 
   async function loadData() {
@@ -104,6 +147,16 @@ function ProjectDetailContent() {
           setEmployees(emps.filter((e) => e.status === "active"));
         } catch (err) {
           toast.error(`Failed loading employees: ${err.message}`);
+        }
+        try {
+          const [invs, exps] = await Promise.all([
+            getInvoicesForProject(id),
+            getExpensesForProject(id),
+          ]);
+          setInvoices(invs);
+          setExpenses(exps);
+        } catch (err) {
+          toast.error(`Failed loading financials: ${err.message}`);
         }
       }
     }
@@ -199,6 +252,127 @@ function ProjectDetailContent() {
     }
   }
 
+  // --- Invoices handlers ---
+  async function openInvoiceDialog() {
+    setInvoiceDialogOpen(true);
+    try {
+      const nextNumber = await getNextInvoiceNumber();
+      setInvoiceForm({
+        invoiceNumber: nextNumber,
+        date: new Date().toISOString().slice(0, 10),
+        amount: "",
+        status: "unpaid",
+        note: "",
+      });
+    } catch {
+      // fine to leave invoiceNumber blank if the lookup fails; the field is still editable
+    }
+  }
+
+  async function handleCreateInvoice(e) {
+    e.preventDefault();
+    if (!invoiceForm.invoiceNumber.trim()) {
+      toast.error("Invoice number is required");
+      return;
+    }
+    if (!invoiceForm.amount || Number(invoiceForm.amount) <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingInvoice(true);
+    try {
+      await createInvoice(
+        {
+          projectId: id,
+          projectName: project.projectName,
+          invoiceNumber: invoiceForm.invoiceNumber.trim(),
+          date: invoiceForm.date,
+          amount: invoiceForm.amount,
+          status: invoiceForm.status,
+          note: invoiceForm.note,
+        },
+        user.uid,
+        user.name
+      );
+      toast.success("Invoice created");
+      setInvoiceDialogOpen(false);
+      loadData();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingInvoice(false);
+    }
+  }
+
+  async function handleToggleInvoiceStatus(inv) {
+    const nextStatus = inv.status === "paid" ? "unpaid" : "paid";
+    try {
+      await setInvoiceStatus(inv.id, nextStatus);
+      setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: nextStatus } : i)));
+      toast.success(nextStatus === "paid" ? "Marked as paid" : "Marked as unpaid");
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
+  async function handleDeleteInvoice(invId) {
+    try {
+      await deleteInvoice(invId);
+      setInvoices((prev) => prev.filter((i) => i.id !== invId));
+      toast.success("Invoice deleted");
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
+  // --- Expenses handlers ---
+  async function handleCreateExpense(e) {
+    e.preventDefault();
+    if (!expenseForm.amount || Number(expenseForm.amount) <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingExpense(true);
+    try {
+      await createExpense(
+        {
+          projectId: id,
+          projectName: project.projectName,
+          type: "manual",
+          category: expenseForm.category,
+          amount: expenseForm.amount,
+          description: expenseForm.description,
+          date: expenseForm.date,
+        },
+        user.uid,
+        user.name
+      );
+      toast.success("Expense added");
+      setExpenseDialogOpen(false);
+      setExpenseForm({
+        category: MANUAL_EXPENSE_CATEGORIES[0],
+        amount: "",
+        description: "",
+        date: new Date().toISOString().slice(0, 10),
+      });
+      loadData();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingExpense(false);
+    }
+  }
+
+  async function handleDeleteExpense(expId) {
+    try {
+      await deleteExpense(expId);
+      setExpenses((prev) => prev.filter((e) => e.id !== expId));
+      toast.success("Expense deleted");
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
   if (loading) {
     return (
       <AppShell>
@@ -214,6 +388,19 @@ function ProjectDetailContent() {
       </AppShell>
     );
   }
+
+  // --- Financial rollups ---
+  const packageAmount = Number(project.quotationAmount) || 0;
+  const received = sumReceived(invoices);
+  const balanceDue = Math.max(packageAmount - received, 0);
+  const receivedPct = packageAmount > 0 ? Math.round((received / packageAmount) * 100) : 0;
+  const balancePct = packageAmount > 0 ? Math.round((balanceDue / packageAmount) * 100) : 0;
+  const teamCost = events.reduce((sum, ev) => sum + sumEventTeamCost(ev.team), 0);
+  const teamCostPct = packageAmount > 0 ? Math.round((teamCost / packageAmount) * 100) : 0;
+  const otherExpensesTotal = expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+  const otherExpensesPct = packageAmount > 0 ? Math.round((otherExpensesTotal / packageAmount) * 100) : 0;
+  const netProfit = packageAmount - teamCost - otherExpensesTotal;
+  const marginPct = packageAmount > 0 ? Math.round((netProfit / packageAmount) * 100) : 0;
 
   return (
     <AppShell>
@@ -332,6 +519,54 @@ function ProjectDetailContent() {
         </div>
       </div>
 
+      {/* --- Financial summary cards --- */}
+      {isAdminOrPM && (
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-500">Package</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{inr(packageAmount)}</p>
+              <p className="text-[11px] text-slate-400">100% (base)</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-500">Received</p>
+              <p className="mt-1 text-lg font-semibold text-emerald-600">{inr(received)}</p>
+              <p className="text-[11px] text-slate-400">{receivedPct}% collected</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-500">Balance Due</p>
+              <p className="mt-1 text-lg font-semibold text-red-600">{inr(balanceDue)}</p>
+              <p className="text-[11px] text-slate-400">{balancePct}% pending</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-500">Team Cost</p>
+              <p className="mt-1 text-lg font-semibold text-amber-600">{inr(teamCost)}</p>
+              <p className="text-[11px] text-slate-400">{teamCostPct}% of package</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-500">Other Expenses</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{inr(otherExpensesTotal)}</p>
+              <p className="text-[11px] text-slate-400">{otherExpensesPct}% of package</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-500">Net Profit</p>
+              <p className="mt-1 text-lg font-semibold text-emerald-700">{inr(netProfit)}</p>
+              <p className="text-[11px] text-slate-400">{marginPct}% margin</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <Card>
           <CardContent className="p-4 sm:p-5">
@@ -401,50 +636,324 @@ function ProjectDetailContent() {
           </CardContent>
         </Card>
 
-        <div>
-          <h3 className="mb-2 text-base font-medium text-slate-900 sm:text-lg">Events</h3>
-          {events.length === 0 ? (
-            <p className="text-sm text-slate-500">No events yet. Add one to start assigning a team.</p>
-          ) : (
-            <ol className="relative ml-3 flex flex-col gap-5 border-l-2 border-slate-200 pl-6">
-              {[...events]
-                .sort((a, b) =>
-                  (a.eventStartDate || "").localeCompare(b.eventStartDate || "") ||
-                  (a.createdAt || "").localeCompare(b.createdAt || "")
-                )
-                .map((ev) => {
-                  const done = isEventPast(ev);
-                  return (
-                    <li key={ev.id} className="relative">
-                      <span
-                        className={`absolute -left-[31px] top-1.5 h-3.5 w-3.5 rounded-full border-2 ${
-                          done
-                            ? "border-emerald-600 bg-emerald-600"
-                            : "border-slate-400 bg-white"
-                        }`}
-                      />
-                      <Link href={`/projects/${id}/events/${ev.id}`}>
+        <div className="flex flex-col gap-6">
+          {/* --- Invoices --- */}
+          {isAdminOrPM && (
+            <Card>
+              <CardContent className="p-4 sm:p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium text-slate-900">Invoices</h3>
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                      New
+                    </span>
+                  </div>
+                  <Dialog open={invoiceDialogOpen} onOpenChange={setInvoiceDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm" onClick={openInvoiceDialog}>
+                        <Plus className="h-4 w-4" /> New Invoice
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="w-[95vw] max-w-md">
+                      <DialogHeader>
+                        <DialogTitle>New Invoice</DialogTitle>
+                      </DialogHeader>
+                      <form onSubmit={handleCreateInvoice} className="flex flex-col gap-4">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <Label htmlFor="invoiceNumber">Invoice #</Label>
+                            <Input
+                              id="invoiceNumber"
+                              value={invoiceForm.invoiceNumber}
+                              onChange={(e) =>
+                                setInvoiceForm((p) => ({ ...p, invoiceNumber: e.target.value }))
+                              }
+                              required
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="invoiceDate">Date</Label>
+                            <Input
+                              id="invoiceDate"
+                              type="date"
+                              value={invoiceForm.date}
+                              onChange={(e) => setInvoiceForm((p) => ({ ...p, date: e.target.value }))}
+                              required
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <Label htmlFor="invoiceAmount">Amount (₹)</Label>
+                            <Input
+                              id="invoiceAmount"
+                              type="number"
+                              min="0"
+                              value={invoiceForm.amount}
+                              onChange={(e) => setInvoiceForm((p) => ({ ...p, amount: e.target.value }))}
+                              required
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="invoiceStatus">Status</Label>
+                            <Select
+                              value={invoiceForm.status}
+                              onValueChange={(v) => setInvoiceForm((p) => ({ ...p, status: v }))}
+                            >
+                              <SelectTrigger id="invoiceStatus">
+                                {invoiceForm.status === "paid" ? "Paid" : "Unpaid"}
+                              </SelectTrigger>
+                              <SelectContent>
+                                {INVOICE_STATUSES.map((s) => (
+                                  <SelectItem key={s} value={s}>
+                                    {s === "paid" ? "Paid" : "Unpaid"}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor="invoiceNote">Note (optional)</Label>
+                          <Textarea
+                            id="invoiceNote"
+                            rows={2}
+                            value={invoiceForm.note}
+                            onChange={(e) => setInvoiceForm((p) => ({ ...p, note: e.target.value }))}
+                          />
+                        </div>
+                        <Button type="submit" disabled={savingInvoice}>
+                          {savingInvoice ? "Saving..." : "Create Invoice"}
+                        </Button>
+                      </form>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+
+                {invoices.length === 0 ? (
+                  <p className="text-sm text-slate-500">No invoices yet.</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {invoices.map((inv) => (
+                      <div
+                        key={inv.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 p-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium text-slate-900">
+                            {inv.invoiceNumber} · {inv.date}
+                          </p>
+                          <p className="text-sm text-slate-500">{inr(inv.amount)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleToggleInvoiceStatus(inv)}
+                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                              inv.status === "paid"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-stone-100 text-stone-600"
+                            }`}
+                          >
+                            {inv.status === "paid" ? "paid" : "unpaid"}
+                          </button>
+                          <button onClick={() => handleDeleteInvoice(inv.id)}>
+                            <Trash2 className="h-4 w-4 text-slate-400 hover:text-red-600" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* --- Events --- */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-base font-medium text-slate-900 sm:text-lg">Events</h3>
+            </div>
+            {events.length === 0 ? (
+              <p className="text-sm text-slate-500">No events yet. Add one to start assigning a team.</p>
+            ) : (
+              <ol className="relative ml-3 flex flex-col gap-5 border-l-2 border-slate-200 pl-6">
+                {[...events]
+                  .sort((a, b) =>
+                    (a.eventStartDate || "").localeCompare(b.eventStartDate || "") ||
+                    (a.createdAt || "").localeCompare(b.createdAt || "")
+                  )
+                  .map((ev) => {
+                    const done = isEventPast(ev);
+                    const evCost = sumEventTeamCost(ev.team);
+                    const assignedCount = ev.team?.length || 0;
+                    return (
+                      <li key={ev.id} className="relative">
+                        <span
+                          className={`absolute -left-[31px] top-1.5 h-3.5 w-3.5 rounded-full border-2 ${
+                            done
+                              ? "border-emerald-600 bg-emerald-600"
+                              : "border-slate-400 bg-white"
+                          }`}
+                        />
                         <Card className="transition hover:border-slate-300">
-                          <CardContent className="flex items-center justify-between gap-3 p-3">
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-slate-900">{ev.eventName}</p>
-                              <p className="truncate text-xs text-slate-500">
-                                {ev.eventStartDate
-                                  ? ev.eventStartDate === ev.eventEndDate
-                                    ? ev.eventStartDate
-                                    : `${ev.eventStartDate} – ${ev.eventEndDate}`
-                                  : "No date set"}{" "}
-                                · {ev.shootDays || 1} day{ev.shootDays !== 1 && "s"} · {ev.team?.length || 0} assigned
-                              </p>
+                          <CardContent className="p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <Link href={`/projects/${id}/events/${ev.id}`} className="min-w-0 flex-1">
+                                <p className="truncate font-medium text-slate-900">
+                                  {ev.eventName}
+                                  <span className="ml-2 inline-flex rounded-full bg-slate-100 px-2 py-0.5 align-middle text-[10px] font-medium text-slate-500">
+                                    {assignedCount > 0 ? "Assigned" : "Not Assigned"}
+                                  </span>
+                                </p>
+                                <p className="truncate text-xs text-slate-500">
+                                  {ev.eventStartDate
+                                    ? ev.eventStartDate === ev.eventEndDate
+                                      ? ev.eventStartDate
+                                      : `${ev.eventStartDate} – ${ev.eventEndDate}`
+                                    : "No date set"}{" "}
+                                  · {ev.shootDays || 1} day{ev.shootDays !== 1 && "s"} · {assignedCount} assigned
+                                </p>
+                              </Link>
+                              <div className="flex shrink-0 items-center gap-2">
+                                {isAdminOrPM && evCost > 0 && (
+                                  <span className="text-sm font-medium text-amber-600">{inr(evCost)}</span>
+                                )}
+                                <Link href={`/projects/${id}/events/${ev.id}`}>
+                                  <Button size="sm" variant="secondary">Assign →</Button>
+                                </Link>
+                                <StatusBadge status={ev.status} />
+                              </div>
                             </div>
-                            <StatusBadge status={ev.status} />
+                            {assignedCount > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {ev.team.map((m) => (
+                                  <span
+                                    key={m.uid}
+                                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
+                                  >
+                                    {m.name}
+                                    {m.cost > 0 && (
+                                      <span className="text-slate-400">
+                                        {m.costLabel || "Full Day"} {inr(m.cost)}
+                                      </span>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </CardContent>
                         </Card>
-                      </Link>
-                    </li>
-                  );
-                })}
-            </ol>
+                      </li>
+                    );
+                  })}
+              </ol>
+            )}
+          </div>
+
+          {/* --- Other Expenses --- */}
+          {isAdminOrPM && (
+            <Card>
+              <CardContent className="p-4 sm:p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-medium text-slate-900">Other Expenses</h3>
+                  <Dialog open={expenseDialogOpen} onOpenChange={setExpenseDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm">
+                        <Plus className="h-4 w-4" /> Add Expense
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="w-[95vw] max-w-md">
+                      <DialogHeader>
+                        <DialogTitle>Add Expense</DialogTitle>
+                      </DialogHeader>
+                      <form onSubmit={handleCreateExpense} className="flex flex-col gap-4">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <Label htmlFor="expenseCategory">Category</Label>
+                            <Select
+                              value={expenseForm.category}
+                              onValueChange={(v) => setExpenseForm((p) => ({ ...p, category: v }))}
+                            >
+                              <SelectTrigger id="expenseCategory">{expenseForm.category}</SelectTrigger>
+                              <SelectContent>
+                                {MANUAL_EXPENSE_CATEGORIES.map((c) => (
+                                  <SelectItem key={c} value={c}>
+                                    {c}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label htmlFor="expenseDate">Date</Label>
+                            <Input
+                              id="expenseDate"
+                              type="date"
+                              value={expenseForm.date}
+                              onChange={(e) => setExpenseForm((p) => ({ ...p, date: e.target.value }))}
+                              required
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor="expenseAmount">Amount (₹)</Label>
+                          <Input
+                            id="expenseAmount"
+                            type="number"
+                            min="0"
+                            value={expenseForm.amount}
+                            onChange={(e) => setExpenseForm((p) => ({ ...p, amount: e.target.value }))}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="expenseDescription">Description</Label>
+                          <Textarea
+                            id="expenseDescription"
+                            rows={2}
+                            value={expenseForm.description}
+                            onChange={(e) =>
+                              setExpenseForm((p) => ({ ...p, description: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <Button type="submit" disabled={savingExpense}>
+                          {savingExpense ? "Saving..." : "Add Expense"}
+                        </Button>
+                      </form>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+
+                {expenses.length === 0 ? (
+                  <p className="text-sm text-slate-500">No expenses recorded.</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {expenses.map((exp) => (
+                      <div
+                        key={exp.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 p-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium text-slate-900">
+                            {exp.category} · {exp.date}
+                          </p>
+                          {exp.description && (
+                            <p className="text-xs text-slate-500">{exp.description}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-medium text-slate-900">{inr(exp.amount)}</span>
+                          <button onClick={() => handleDeleteExpense(exp.id)}>
+                            <Trash2 className="h-4 w-4 text-slate-400 hover:text-red-600" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           )}
         </div>
       </div>

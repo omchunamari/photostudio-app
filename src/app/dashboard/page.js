@@ -10,27 +10,31 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import AttendanceCard from "@/components/AttendanceCard";
 import DailyReportPanel from "@/components/DailyReportPanel";
+import FinanceOverview from "@/components/dashboard/FinanceOverview";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { getAttendanceForDate } from "@/lib/firebase/attendance";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { getPendingLeaveRequests } from "@/lib/firebase/leave";
 import { getAllDevices } from "@/lib/firebase/devices";
-import { getAllTasks, getTasksForEmployee, isOverdue } from "@/lib/firebase/postProduction";
 import { getAnnouncement, setAnnouncement, clearAnnouncement } from "@/lib/firebase/announcements";
 import { getEventsForEmployee } from "@/lib/firebase/events";
 import { isEventPast } from "@/lib/status";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { FINANCE_ROLES, fyStartYearForDate, fyLabel, loadFinanceOverview } from "@/lib/dashboardFinance";
 import { toast } from "sonner";
 import {
   Users,
   UserX,
   CalendarClock,
   Smartphone,
-  Clapperboard,
-  Eye,
-  AlertTriangle,
-  ListChecks,
   FolderKanban,
   Megaphone,
   Pencil,
@@ -40,14 +44,54 @@ const ADMIN_ROLES = ["super_admin", "admin"];
 // Who can post/edit the dashboard-wide announcement — same boundary as
 // project ops elsewhere (super_admin/admin/project_manager).
 const ANNOUNCEMENT_ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
-// Post-production visibility is broader than the attendance/HR admin view above —
-// project managers manage post-prod work too, so they get the team-wide widget.
-const POST_PROD_ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
+
+function greetingPart() {
+  const h = new Date().getHours();
+  if (h < 12) return "morning";
+  if (h < 17) return "afternoon";
+  return "evening";
+}
 
 function DashboardContent() {
   const { user } = useAuth();
   const isAdminView = ADMIN_ROLES.includes(user.role);
   const canEditAnnouncement = ANNOUNCEMENT_ADMIN_ROLES.includes(user.role);
+  const isFinanceView = FINANCE_ROLES.includes(user.role);
+
+  // --- Finance overview (Total Revenue / Received / Outstanding / Cash
+  // Received / Payments chart / Team Wages Due) — admin/PM only. See
+  // src/lib/dashboardFinance.js for the FY math and data aggregation. ---
+  const currentFYStart = fyStartYearForDate(new Date());
+  const [fyStart, setFyStart] = useState(currentFYStart);
+  const fyOptions = [0, 1, 2, 3, 4].map((offset) => currentFYStart - offset);
+
+  const [financeLoading, setFinanceLoading] = useState(true);
+  const [finance, setFinance] = useState({
+    totalRevenue: 0,
+    projectsBooked: 0,
+    receivedOnBookings: 0,
+    outstanding: 0,
+    cashReceived: 0,
+    monthly: [],
+    wagesDue: [],
+  });
+
+  useEffect(() => {
+    if (!isFinanceView) return;
+    let cancelled = false;
+    setFinanceLoading(true);
+    loadFinanceOverview(fyStart)
+      .then((data) => {
+        if (!cancelled) setFinance(data);
+      })
+      .catch((err) => console.error("Failed to load finance overview:", err))
+      .finally(() => {
+        if (!cancelled) setFinanceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isFinanceView, fyStart]);
 
   const [adminStats, setAdminStats] = useState({
     presentToday: null,
@@ -57,14 +101,6 @@ function DashboardContent() {
   });
 
   const [myProjects, setMyProjects] = useState([]); // [{ projectId, projectName, eventCount, latestNote: { text, addedAt } | null }]
-
-  const isPostProdAdminView = POST_PROD_ADMIN_ROLES.includes(user.role);
-  const [postProdStats, setPostProdStats] = useState({
-    inProgress: null,
-    inReview: null,
-    overdue: null,
-    myOpen: null,
-  });
 
   const [announcement, setAnnouncementState] = useState(null);
   const [editingAnnouncement, setEditingAnnouncement] = useState(false);
@@ -130,36 +166,6 @@ function DashboardContent() {
     }
   }, [isAdminView]);
 
-  useEffect(() => {
-    loadPostProdStats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPostProdAdminView, user.uid]);
-
-  async function loadPostProdStats() {
-    try {
-      if (isPostProdAdminView) {
-        const all = await getAllTasks();
-        setPostProdStats({
-          inProgress: all.filter((t) => t.status === "In Progress").length,
-          inReview: all.filter((t) => t.status === "In Review").length,
-          overdue: all.filter((t) => isOverdue(t)).length,
-          myOpen: null,
-        });
-      } else {
-        const mine = await getTasksForEmployee(user.uid);
-        const open = mine.filter((t) => t.status !== "Completed");
-        setPostProdStats({
-          inProgress: null,
-          inReview: mine.filter((t) => t.status === "In Review").length,
-          overdue: open.filter((t) => isOverdue(t)).length,
-          myOpen: open.length,
-        });
-      }
-    } catch (err) {
-      console.error("Failed to load post-production stats:", err);
-    }
-  }
-
   async function loadAdminStats() {
     const [todayAttendance, allEmployees, pendingLeaves, allDevices] = await Promise.all([
       getAttendanceForDate(),
@@ -216,9 +222,32 @@ function DashboardContent() {
   return (
     <AppShell>
       <div className="flex h-full flex-col gap-3 sm:gap-4">
-        <h2 className="text-lg font-semibold text-slate-900 sm:text-2xl">
-          Welcome back, {user.name.split(" ")[0]}
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+            </p>
+            <h2 className="font-heading text-2xl font-semibold text-foreground sm:text-3xl">
+              Good {greetingPart()}, {user.name.split(" ")[0]}.
+            </h2>
+          </div>
+          {isFinanceView && (
+            <Select value={String(fyStart)} onValueChange={(v) => setFyStart(Number(v))}>
+              <SelectTrigger className="w-[130px] bg-card">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {fyOptions.map((y) => (
+                  <SelectItem key={y} value={String(y)}>
+                    {fyLabel(y)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        {isFinanceView && <FinanceOverview finance={finance} loading={financeLoading} fyLabelText={fyLabel(fyStart)} />}
 
         {(announcement || (canEditAnnouncement && editingAnnouncement)) && (
           <Card className="border-amber-300 bg-amber-50">
@@ -301,27 +330,6 @@ function DashboardContent() {
               )}
 
               {!isAdminView && <MyProjectsPanel projects={myProjects} />}
-
-              <div>
-                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Clapperboard className="h-3.5 w-3.5" /> Post-Production
-                </p>
-                <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
-                  {isPostProdAdminView ? (
-                    <>
-                      <StatCard icon={ListChecks} label="In Progress" value={postProdStats.inProgress} accent="sky" href="/post-production" />
-                      <StatCard icon={Eye} label="In Review" value={postProdStats.inReview} accent="violet" href="/post-production" />
-                      <StatCard icon={AlertTriangle} label="Overdue" value={postProdStats.overdue} accent="rose" href="/post-production" />
-                    </>
-                  ) : (
-                    <>
-                      <StatCard icon={ListChecks} label="My Open Tasks" value={postProdStats.myOpen} accent="sky" href="/post-production" />
-                      <StatCard icon={Eye} label="Awaiting Review" value={postProdStats.inReview} accent="violet" href="/post-production" />
-                      <StatCard icon={AlertTriangle} label="Overdue" value={postProdStats.overdue} accent="rose" href="/post-production" />
-                    </>
-                  )}
-                </div>
-              </div>
             </div>
           </TabsContent>
 

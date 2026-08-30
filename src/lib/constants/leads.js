@@ -1,5 +1,8 @@
+// "Active stages" = every stage except the two terminal ones (Won/Lost) —
+// used as the list-page filter's default (matches studioops' "Active
+// stages (0)" default, which hides closed-out leads until you ask for them).
 export const LEAD_STATUSES = [
-  "New",
+  "New Inquiry",
   "Contacted",
   "Meeting Scheduled",
   "Quoted",
@@ -7,14 +10,18 @@ export const LEAD_STATUSES = [
   "Lost",
 ];
 
-export const PROJECT_TYPES = ["Wedding", "Commercial"];
+export const ACTIVE_LEAD_STATUSES = LEAD_STATUSES.filter((s) => s !== "Won" && s !== "Lost");
+
+export const PROJECT_TYPES = ["Wedding", "Pre-Wedding", "Engagement", "Commercial", "Portrait", "Event", "Other"];
 
 export const LEAD_SOURCES = [
   "Referral",
   "Instagram",
+  "Facebook",
   "Website",
   "Walk-in",
   "WhatsApp",
+  "Google",
   "Other",
 ];
 
@@ -34,3 +41,14 @@ export const PAYMENT_MODES = [
 // Common milestone labels, offered as quick-picks in the payment form.
 // Admin can still type a custom label.
 export const PAYMENT_MILESTONE_PRESETS = ["Advance", "Milestone", "Balance"];
+
+// Timeline activity types shown as tabs on the lead detail page, matching
+// studioops' Call / WhatsApp / Message / Email / Meeting / Note log.
+export const ACTIVITY_TYPES = [
+  { value: "call", label: "Call" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "message", label: "Message" },
+  { value: "email", label: "Email" },
+  { value: "meeting", label: "Meeting" },
+  { value: "note", label: "Note" },
+];
