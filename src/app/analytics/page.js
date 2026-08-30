@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -29,7 +30,11 @@ import {
 import { getAllEvents } from "@/lib/firebase/events";
 import { isEventPast } from "@/lib/status";
 import { getAllProjects } from "@/lib/firebase/projects";
-import { getAllQuotations, getPaymentSummary } from "@/lib/firebase/quotations";
+import { getAllQuotations } from "@/lib/firebase/quotations";
+import { getAllInvoices, sumReceived } from "@/lib/firebase/invoices";
+import { getAllLeads } from "@/lib/firebase/leads";
+import { LEAD_STATUSES, LEAD_SOURCES } from "@/lib/constants/leads";
+import { QUOTE_STATUSES, QUOTE_STATUS_LABELS } from "@/lib/constants/quotations";
 import {
   getAllExpenses,
   createExpense,
@@ -40,20 +45,31 @@ import {
 } from "@/lib/firebase/expenses";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
-import { getAllTasks } from "@/lib/firebase/postProduction";
+import { getAllTasks, TASK_STATUSES, TASK_TYPES, TASK_PRIORITIES, isOverdue } from "@/lib/firebase/postProduction";
 import { toast } from "sonner";
 import {
-  BarChart,
-  Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ResponsiveContainer,
-  Cell,
 } from "recharts";
-import { Users, Wallet, TrendingUp, IndianRupee, Trash2, Plus } from "lucide-react";
+import {
+  Users,
+  Wallet,
+  TrendingUp,
+  IndianRupee,
+  Trash2,
+  Plus,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Target,
+  Clapperboard,
+} from "lucide-react";
 
 // Financial data — admin/PM only, mirrors the isProjectOps() boundary on
 // leads/quotations/expenses in firestore.rules. Not shown to HR, leaders,
@@ -63,8 +79,20 @@ const ANALYTICS_ROLES = ["super_admin", "admin", "project_manager"];
 const TABS = [
   { id: "team-load", label: "Team Load", icon: Users },
   { id: "value", label: "Employee Value", icon: IndianRupee },
+  { id: "funnel", label: "Sales Funnel", icon: Target },
+  { id: "post-prod", label: "Post-Production", icon: Clapperboard },
   { id: "expenses", label: "Expenses", icon: Wallet },
   { id: "pnl", label: "Profit & Loss", icon: TrendingUp },
+];
+
+// Shared line-chart palette, drawn from the theme's --chart-1..5 tokens so
+// it stays consistent with the rest of the app (and adapts in dark mode).
+const LINE_COLORS = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
 ];
 
 function formatINR(n) {
@@ -98,6 +126,25 @@ function lastNMonthKeys(count) {
   return keys;
 }
 
+// Small stat-card grid used across every tab so the numbers up top stay
+// visually consistent no matter which tab you're on.
+function StatGrid({ stats }) {
+  return (
+    <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {stats.map((s) => (
+        <Card key={s.label}>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground">{s.label}</p>
+            <p className={`text-lg font-semibold ${s.negative ? "text-destructive" : "text-foreground"}`}>
+              {s.value}
+            </p>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 function AnalyticsContent() {
   const { user } = useAuth();
   const router = useRouter();
@@ -108,10 +155,12 @@ function AnalyticsContent() {
   const [events, setEvents] = useState([]);
   const [projects, setProjects] = useState([]);
   const [quotations, setQuotations] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [freelancers, setFreelancers] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [leads, setLeads] = useState([]);
 
   useEffect(() => {
     if (!isAllowed) {
@@ -121,22 +170,26 @@ function AnalyticsContent() {
     async function load() {
       setLoading(true);
       try {
-        const [evts, projs, quotes, exps, emps, frls, tsks] = await Promise.all([
+        const [evts, projs, quotes, invs, exps, emps, frls, tsks, lds] = await Promise.all([
           getAllEvents(),
           getAllProjects(),
           getAllQuotations(),
+          getAllInvoices(),
           getAllExpenses(),
           getAllEmployees(),
           getAllFreelancers(),
           getAllTasks(),
+          getAllLeads(),
         ]);
         setEvents(evts);
         setProjects(projs);
         setQuotations(quotes);
+        setInvoices(invs);
         setExpenses(exps);
         setEmployees(emps);
         setFreelancers(frls);
         setTasks(tsks);
+        setLeads(lds);
       } catch (err) {
         toast.error(err.message || "Failed to load analytics data");
       } finally {
@@ -159,11 +212,11 @@ function AnalyticsContent() {
       <div className="mb-6">
         <h1 className="font-heading text-2xl font-semibold text-foreground">Analytics</h1>
         <p className="text-sm text-muted-foreground">
-          Team load, expenses, and project profitability.
+          Team load, sales, post-production, expenses, and project profitability.
         </p>
       </div>
 
-      <div className="mb-6 flex gap-1 border-b border-border">
+      <div className="mb-6 flex flex-wrap gap-1 border-b border-border">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -186,6 +239,10 @@ function AnalyticsContent() {
         <TeamLoadTab events={events} tasks={tasks} employees={employees} />
       ) : tab === "value" ? (
         <EmployeeValueTab events={events} projects={projects} quotations={quotations} />
+      ) : tab === "funnel" ? (
+        <SalesFunnelTab leads={leads} quotations={quotations} />
+      ) : tab === "post-prod" ? (
+        <PostProductionTab tasks={tasks} employees={employees} />
       ) : tab === "expenses" ? (
         <ExpensesTab
           expenses={expenses}
@@ -197,7 +254,7 @@ function AnalyticsContent() {
           onChanged={refreshExpenses}
         />
       ) : (
-        <PnlTab projects={projects} quotations={quotations} expenses={expenses} />
+        <PnlTab projects={projects} quotations={quotations} invoices={invoices} expenses={expenses} events={events} />
       )}
     </div>
   );
@@ -208,6 +265,8 @@ function AnalyticsContent() {
 // rate negotiation. Counts distinct events (not shoot-days) by default,
 // since that's what "how many projects have they done" usually means in
 // a negotiation — shoot-days is offered as a secondary metric per bar.
+// Rendered as a line chart connecting each person's ranked values (rather
+// than a horizontal bar chart) per the team's chart-style preference.
 // ---------------------------------------------------------------------
 function TeamLoadTab({ events, tasks, employees }) {
   const [metric, setMetric] = useState("all"); // "all" | "events" | "days" | "tasks"
@@ -275,9 +334,6 @@ function TeamLoadTab({ events, tasks, employees }) {
     return rows;
   }, [events, tasks, employees, personType, metric, activeOnly]);
 
-  // No cap — with a team in the 20-30 range, a top-N cutoff would quietly
-  // drop people from the chart while they still showed in the table below,
-  // which is more confusing than a taller chart. Height grows with the list.
   const chartData = data.map((r) => ({
     name: r.name,
     value: metric === "events" ? r.events : metric === "days" ? r.days : r.tasks,
@@ -341,34 +397,37 @@ function TeamLoadTab({ events, tasks, employees }) {
         <>
           <Card className="mb-6">
             <CardContent className="pt-4">
-              <ResponsiveContainer width="100%" height={Math.max(260, chartData.length * 32)}>
-                {metric === "all" ? (
-                  <BarChart data={chartData} layout="vertical" margin={{ left: 24, right: 24 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                    <XAxis type="number" allowDecimals={false} />
-                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12 }} />
-                    <Tooltip contentStyle={{ fontSize: 12 }} />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="events" name="Events" fill="oklch(0.55 0.13 60)" radius={[0, 4, 4, 0]} />
-                    <Bar dataKey="days" name="Shoot Days" fill="oklch(0.7 0.15 30)" radius={[0, 4, 4, 0]} />
-                    <Bar dataKey="tasks" name="Post-Prod Tasks" fill="oklch(0.55 0.1 150)" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                ) : (
-                  <BarChart data={chartData} layout="vertical" margin={{ left: 24, right: 24 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                    <XAxis type="number" allowDecimals={false} />
-                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      formatter={(v) => [v, metric === "events" ? "Events" : metric === "days" ? "Shoot days" : "Tasks"]}
-                      contentStyle={{ fontSize: 12 }}
+              <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={chartData} margin={{ left: 8, right: 16, bottom: 48 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: 11 }}
+                    angle={-40}
+                    textAnchor="end"
+                    interval={0}
+                    height={70}
+                  />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {metric === "all" ? (
+                    <>
+                      <Line type="monotone" dataKey="events" name="Events" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+                      <Line type="monotone" dataKey="days" name="Shoot Days" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+                      <Line type="monotone" dataKey="tasks" name="Post-Prod Tasks" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
+                    </>
+                  ) : (
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      name={metric === "events" ? "Events" : metric === "days" ? "Shoot days" : "Tasks"}
+                      stroke={LINE_COLORS[0]}
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
                     />
-                    <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                      {chartData.map((_, i) => (
-                        <Cell key={i} fill="oklch(0.55 0.13 60)" />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                )}
+                  )}
+                </LineChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
@@ -406,38 +465,28 @@ function TeamLoadTab({ events, tasks, employees }) {
 }
 
 // ---------------------------------------------------------------------
-// Employee Value — "how much of a project's revenue is this person's
-// work worth". For each project, revenue (the quotation amount) is split
-// evenly across everyone who's on that project's team across all its
-// events — not per-event, since the same person is often on multiple
-// events within one project and shouldn't get counted, or paid out,
-// twice for the same project's revenue. Summed across every project a
-// person touched, this gives a total "value generated" figure — useful
-// context for rate negotiation, alongside the Team Load counts.
+// Tab 2: Employee Value — each project's revenue split evenly across its
+// team, summed per person across every project they've worked on.
 // ---------------------------------------------------------------------
 function EmployeeValueTab({ events, projects, quotations }) {
-  const [personType, setPersonType] = useState("all"); // "all" | "employee" | "freelancer"
+  const [personType, setPersonType] = useState("all");
 
   const rows = useMemo(() => {
-    // Unique team members per project (deduped across that project's events).
-    const membersByProject = {};
-    events.forEach((ev) => {
-      if (!membersByProject[ev.projectId]) membersByProject[ev.projectId] = new Map();
-      const m = membersByProject[ev.projectId];
-      (ev.team || []).forEach((member) => {
-        if (!m.has(member.uid)) m.set(member.uid, member);
-      });
-    });
-
     const byPerson = {};
     projects.forEach((p) => {
-      const members = membersByProject[p.id];
-      if (!members || members.size === 0) return;
       const quote = quotations.find((q) => q.id === p.quotationId);
-      const revenue = quote?.amount || 0;
-      if (revenue === 0) return;
-      const share = revenue / members.size;
-      members.forEach((member) => {
+      const revenue = quote?.total ?? p.quotationAmount ?? 0;
+      if (!revenue) return;
+      const projectEvents = events.filter((ev) => ev.projectId === p.id);
+      const teamSet = new Map();
+      projectEvents.forEach((ev) => {
+        (ev.team || []).forEach((m) => {
+          if (!teamSet.has(m.uid)) teamSet.set(m.uid, m);
+        });
+      });
+      if (teamSet.size === 0) return;
+      const share = revenue / teamSet.size;
+      teamSet.forEach((member) => {
         if (!byPerson[member.uid]) {
           byPerson[member.uid] = {
             uid: member.uid,
@@ -459,7 +508,6 @@ function EmployeeValueTab({ events, projects, quotations }) {
     return list;
   }, [events, projects, quotations, personType]);
 
-  // Same no-cap reasoning as Team Load's chart above.
   const chartData = rows.map((r) => ({ name: r.name, value: Math.round(r.value) }));
 
   return (
@@ -492,18 +540,21 @@ function EmployeeValueTab({ events, projects, quotations }) {
         <>
           <Card className="mb-6">
             <CardContent className="pt-4">
-              <ResponsiveContainer width="100%" height={Math.max(260, chartData.length * 32)}>
-                <BarChart data={chartData} layout="vertical" margin={{ left: 24, right: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" tickFormatter={(v) => formatINR(v)} />
-                  <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12 }} />
+              <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={chartData} margin={{ left: 8, right: 16, bottom: 48 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: 11 }}
+                    angle={-40}
+                    textAnchor="end"
+                    interval={0}
+                    height={70}
+                  />
+                  <YAxis tickFormatter={(v) => formatINR(v)} tick={{ fontSize: 11 }} width={70} />
                   <Tooltip formatter={(v) => [formatINR(v), "Value generated"]} contentStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                    {chartData.map((_, i) => (
-                      <Cell key={i} fill="oklch(0.55 0.13 60)" />
-                    ))}
-                  </Bar>
-                </BarChart>
+                  <Line type="monotone" dataKey="value" name="Value generated" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
@@ -539,7 +590,413 @@ function EmployeeValueTab({ events, projects, quotations }) {
 }
 
 // ---------------------------------------------------------------------
-// Tab 2: Expenses — freelancer payouts (auto-suggested from dayRate ×
+// Tab 3: Sales Funnel — new. Leads by stage/source, quotation status
+// breakdown, win rate, and a monthly new-leads-vs-won trend. Uses
+// LEAD_STATUSES as the funnel order (New Inquiry -> ... -> Won/Lost) and
+// QUOTE_STATUSES for the quotation breakdown.
+// ---------------------------------------------------------------------
+function SalesFunnelTab({ leads, quotations }) {
+  const [range, setRange] = useState("6");
+
+  const stageCounts = useMemo(() => {
+    const counts = Object.fromEntries(LEAD_STATUSES.map((s) => [s, 0]));
+    leads.forEach((l) => {
+      if (counts[l.status] !== undefined) counts[l.status] += 1;
+      else counts[l.status] = (counts[l.status] || 0) + 1;
+    });
+    return LEAD_STATUSES.map((s) => ({ stage: s, count: counts[s] || 0 }));
+  }, [leads]);
+
+  const sourceRows = useMemo(() => {
+    const bySource = {};
+    leads.forEach((l) => {
+      const key = l.source || "Unspecified";
+      if (!bySource[key]) bySource[key] = { source: key, count: 0, won: 0, lost: 0, budget: 0 };
+      bySource[key].count += 1;
+      bySource[key].budget += l.budget || 0;
+      if (l.status === "Won") bySource[key].won += 1;
+      if (l.status === "Lost") bySource[key].lost += 1;
+    });
+    return Object.values(bySource).sort((a, b) => b.count - a.count);
+  }, [leads]);
+
+  const quoteStatusRows = useMemo(() => {
+    const byStatus = Object.fromEntries(QUOTE_STATUSES.map((s) => [s, { status: s, count: 0, value: 0 }]));
+    quotations.forEach((q) => {
+      const key = byStatus[q.status] ? q.status : "draft";
+      byStatus[key].count += 1;
+      byStatus[key].value += q.total || 0;
+    });
+    return QUOTE_STATUSES.map((s) => byStatus[s]);
+  }, [quotations]);
+
+  const monthlyTrend = useMemo(() => {
+    const months = lastNMonthKeys(Number(range));
+    const byMonth = Object.fromEntries(months.map((k) => [k, { newLeads: 0, won: 0 }]));
+    leads.forEach((l) => {
+      const key = monthKey(l.createdAt);
+      if (key && byMonth[key]) byMonth[key].newLeads += 1;
+    });
+    leads.forEach((l) => {
+      if (l.status !== "Won") return;
+      const key = monthKey(l.updatedAt || l.createdAt);
+      if (key && byMonth[key]) byMonth[key].won += 1;
+    });
+    return months.map((key) => ({ month: monthLabel(key), ...byMonth[key] }));
+  }, [leads, range]);
+
+  const totalLeads = leads.length;
+  const won = leads.filter((l) => l.status === "Won").length;
+  const lost = leads.filter((l) => l.status === "Lost").length;
+  const closed = won + lost;
+  const conversionRate = closed > 0 ? (won / closed) * 100 : null;
+  const pipelineValue = leads
+    .filter((l) => l.status !== "Won" && l.status !== "Lost")
+    .reduce((sum, l) => sum + (l.budget || 0), 0);
+  const quotedValue = quotations.reduce((sum, q) => sum + (q.total || 0), 0);
+
+  return (
+    <div>
+      <StatGrid
+        stats={[
+          { label: "Total Leads", value: totalLeads },
+          { label: "Won", value: won },
+          { label: "Lost", value: lost, negative: lost > 0 },
+          { label: "Win Rate", value: conversionRate === null ? "—" : `${conversionRate.toFixed(1)}%` },
+          { label: "Open Pipeline Value", value: formatINR(pipelineValue) },
+        ]}
+      />
+
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-foreground">New leads vs. won — monthly trend</h3>
+        <Select value={range} onValueChange={setRange}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue>{(v) => (v === "6" ? "Last 6 months" : "Last 12 months")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="6">Last 6 months</SelectItem>
+            <SelectItem value="12">Last 12 months</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={monthlyTrend} margin={{ left: 8, right: 16 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="newLeads" name="New Leads" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="won" name="Won" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <h3 className="mb-4 text-sm font-medium text-foreground">Funnel by stage</h3>
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={stageCounts} margin={{ left: 8, right: 16, bottom: 24 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="stage" tick={{ fontSize: 11 }} interval={0} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="count" name="Leads" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-4 text-sm font-medium text-foreground">Leads by source</h3>
+          <Card className="mb-4">
+            <CardContent className="pt-4">
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={sourceRows} margin={{ left: 8, right: 16, bottom: 40 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="source" tick={{ fontSize: 11 }} angle={-30} textAnchor="end" interval={0} height={55} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
+                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="count" name="Leads" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source</TableHead>
+                  <TableHead className="text-right">Leads</TableHead>
+                  <TableHead className="text-right">Won</TableHead>
+                  <TableHead className="text-right">Lost</TableHead>
+                  <TableHead className="text-right">Budget</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sourceRows.map((r) => (
+                  <TableRow key={r.source}>
+                    <TableCell className="font-medium text-foreground">{r.source}</TableCell>
+                    <TableCell className="text-right">{r.count}</TableCell>
+                    <TableCell className="text-right">{r.won}</TableCell>
+                    <TableCell className="text-right">{r.lost}</TableCell>
+                    <TableCell className="text-right">{formatINR(r.budget)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+        </div>
+
+        <div>
+          <h3 className="mb-4 text-sm font-medium text-foreground">Quotations by status</h3>
+          <Card className="mb-4">
+            <CardContent className="pt-4">
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={quoteStatusRows} margin={{ left: 8, right: 16, bottom: 24 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="status" tickFormatter={(s) => QUOTE_STATUS_LABELS[s] || s} tick={{ fontSize: 11 }} interval={0} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
+                  <Tooltip
+                    formatter={(v, name) => [name === "Value" ? formatINR(v) : v, name]}
+                    labelFormatter={(s) => QUOTE_STATUS_LABELS[s] || s}
+                    contentStyle={{ fontSize: 12 }}
+                  />
+                  <Line type="monotone" dataKey="count" name="Count" stroke={LINE_COLORS[3]} strokeWidth={2} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Count</TableHead>
+                  <TableHead className="text-right">Value</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {quoteStatusRows.map((r) => (
+                  <TableRow key={r.status}>
+                    <TableCell className="font-medium text-foreground">{QUOTE_STATUS_LABELS[r.status] || r.status}</TableCell>
+                    <TableCell className="text-right">{r.count}</TableCell>
+                    <TableCell className="text-right">{formatINR(r.value)}</TableCell>
+                  </TableRow>
+                ))}
+                <TableRow>
+                  <TableCell className="font-medium text-foreground">Total quoted value</TableCell>
+                  <TableCell className="text-right">{quotations.length}</TableCell>
+                  <TableCell className="text-right font-medium">{formatINR(quotedValue)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Tab 4: Post-Production — new. Task pipeline status, type mix,
+// priority mix, overdue tasks, and a monthly completed-tasks trend.
+// ---------------------------------------------------------------------
+function PostProductionTab({ tasks, employees }) {
+  const [range, setRange] = useState("6");
+
+  const statusRows = useMemo(() => {
+    const counts = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0]));
+    tasks.forEach((t) => {
+      if (counts[t.status] !== undefined) counts[t.status] += 1;
+    });
+    return TASK_STATUSES.map((s) => ({ status: s, count: counts[s] || 0 }));
+  }, [tasks]);
+
+  const typeRows = useMemo(() => {
+    const counts = {};
+    tasks.forEach((t) => {
+      const key = t.taskType || "Other";
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return TASK_TYPES.map((ty) => ({ type: ty, count: counts[ty] || 0 })).filter((r) => r.count > 0 || TASK_TYPES.includes(r.type));
+  }, [tasks]);
+
+  const priorityRows = useMemo(() => {
+    const counts = Object.fromEntries(TASK_PRIORITIES.map((p) => [p, 0]));
+    tasks.forEach((t) => {
+      if (counts[t.priority] !== undefined) counts[t.priority] += 1;
+    });
+    return TASK_PRIORITIES.map((p) => ({ priority: p, count: counts[p] || 0 }));
+  }, [tasks]);
+
+  const overdueTasks = useMemo(() => tasks.filter((t) => isOverdue(t)), [tasks]);
+
+  const byAssignee = useMemo(() => {
+    const byPerson = {};
+    tasks.forEach((t) => {
+      const uids = t.assignedUids?.length ? t.assignedUids : [t.assignedUid].filter(Boolean);
+      const names = t.assignedNames?.length ? t.assignedNames : [t.assignedName].filter(Boolean);
+      uids.forEach((uid, i) => {
+        if (!uid) return;
+        if (!byPerson[uid]) {
+          const emp = employees.find((e) => e.uid === uid);
+          byPerson[uid] = { uid, name: names[i] || emp?.name || "Unknown", total: 0, completed: 0, overdue: 0 };
+        }
+        byPerson[uid].total += 1;
+        if (t.status === "Completed") byPerson[uid].completed += 1;
+        if (isOverdue(t)) byPerson[uid].overdue += 1;
+      });
+    });
+    return Object.values(byPerson).sort((a, b) => b.total - a.total);
+  }, [tasks, employees]);
+
+  const monthlyCompleted = useMemo(() => {
+    const months = lastNMonthKeys(Number(range));
+    const byMonth = Object.fromEntries(months.map((k) => [k, { completed: 0, created: 0 }]));
+    tasks.forEach((t) => {
+      const createdKey = monthKey(t.createdAt);
+      if (createdKey && byMonth[createdKey]) byMonth[createdKey].created += 1;
+    });
+    tasks.forEach((t) => {
+      if (t.status !== "Completed") return;
+      const key = monthKey(t.updatedAt || t.createdAt);
+      if (key && byMonth[key]) byMonth[key].completed += 1;
+    });
+    return months.map((key) => ({ month: monthLabel(key), ...byMonth[key] }));
+  }, [tasks, range]);
+
+  const total = tasks.length;
+  const completed = tasks.filter((t) => t.status === "Completed").length;
+  const inProgress = tasks.filter((t) => t.status === "In Progress" || t.status === "In Review").length;
+
+  return (
+    <div>
+      <StatGrid
+        stats={[
+          { label: "Total Tasks", value: total },
+          { label: "Completed", value: completed },
+          { label: "In Progress / Review", value: inProgress },
+          { label: "Overdue", value: overdueTasks.length, negative: overdueTasks.length > 0 },
+        ]}
+      />
+
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-foreground">Created vs. completed — monthly trend</h3>
+        <Select value={range} onValueChange={setRange}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue>{(v) => (v === "6" ? "Last 6 months" : "Last 12 months")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="6">Last 6 months</SelectItem>
+            <SelectItem value="12">Last 12 months</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={monthlyCompleted} margin={{ left: 8, right: 16 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="created" name="Created" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="completed" name="Completed" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-4 text-sm font-medium text-foreground">By pipeline stage</h3>
+          <Card>
+            <CardContent className="pt-4">
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={statusRows} margin={{ left: 8, right: 16, bottom: 40 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="status" tick={{ fontSize: 10 }} angle={-25} textAnchor="end" interval={0} height={55} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
+                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="count" name="Tasks" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div>
+          <h3 className="mb-4 text-sm font-medium text-foreground">By priority</h3>
+          <Card>
+            <CardContent className="pt-4">
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={priorityRows} margin={{ left: 8, right: 16, bottom: 24 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="priority" tick={{ fontSize: 11 }} interval={0} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
+                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="count" name="Tasks" stroke={LINE_COLORS[3]} strokeWidth={2} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <h3 className="mb-4 text-sm font-medium text-foreground">By task type</h3>
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={typeRows} margin={{ left: 8, right: 16, bottom: 60 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="type" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0} height={80} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
+              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="count" name="Tasks" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <h3 className="mb-4 text-sm font-medium text-foreground">By assignee</h3>
+      {byAssignee.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
+      ) : (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+                <TableHead className="text-right">Completed</TableHead>
+                <TableHead className="text-right">Overdue</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {byAssignee.map((r) => (
+                <TableRow key={r.uid}>
+                  <TableCell className="font-medium text-foreground">{r.name}</TableCell>
+                  <TableCell className="text-right">{r.total}</TableCell>
+                  <TableCell className="text-right">{r.completed}</TableCell>
+                  <TableCell className={`text-right ${r.overdue > 0 ? "text-destructive font-medium" : ""}`}>{r.overdue}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Tab 5: Expenses — freelancer payouts (auto-suggested from dayRate ×
 // shoot days on their assignments, logged on demand rather than
 // auto-created so admin controls exactly when a payout is recorded),
 // manual costs, and advances/reimbursements to anyone on the team.
@@ -734,6 +1191,17 @@ function ExpensesTab({ expenses, projects, employees, freelancers, events, user,
   });
   const totalShown = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
+  const byCategoryChart = useMemo(() => {
+    const map = {};
+    filteredExpenses.forEach((e) => {
+      const label = e.type === "freelancer_payout" ? "Freelancer Payouts" : e.type === "advance" ? "Advances" : e.category || "Misc";
+      map[label] = (map[label] || 0) + (e.amount || 0);
+    });
+    return Object.entries(map)
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [filteredExpenses]);
+
   return (
     <div>
       {suggestedPayouts.length > 0 && (
@@ -917,6 +1385,23 @@ function ExpensesTab({ expenses, projects, employees, freelancers, events, user,
         </CardContent>
       </Card>
 
+      {byCategoryChart.length > 0 && (
+        <Card className="mb-4">
+          <CardContent className="pt-4">
+            <p className="mb-2 text-sm font-medium text-foreground">By category</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={byCategoryChart} margin={{ left: 8, right: 16, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="category" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" interval={0} height={55} />
+                <YAxis tickFormatter={(v) => formatINR(v)} tick={{ fontSize: 11 }} width={60} />
+                <Tooltip formatter={(v) => [formatINR(v), "Amount"]} contentStyle={{ fontSize: 12 }} />
+                <Line type="monotone" dataKey="amount" name="Amount" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
       {filteredExpenses.length === 0 ? (
         <p className="text-sm text-muted-foreground">No expenses logged yet.</p>
       ) : (
@@ -965,36 +1450,64 @@ function ExpensesTab({ expenses, projects, employees, freelancers, events, user,
 }
 
 // ---------------------------------------------------------------------
-// Tab 3: Project P&L — revenue is the quotation's contracted amount
+// Tab 6: Project P&L — revenue is the quotation's contracted amount
 // (not just what's been collected so far — that's shown separately as
 // "Collected" for context), costs are every expense logged against the
 // project. Projects with no linked quotation (shouldn't normally happen,
 // since a project is created from a Won quotation) show revenue as ₹0.
 // ---------------------------------------------------------------------
-function PnlTab({ projects, quotations, expenses }) {
+function PnlTab({ projects, quotations, invoices, expenses, events }) {
   const [range, setRange] = useState("6"); // months back: "6" | "12"
+  const [expandedId, setExpandedId] = useState(null);
   const costByProject = useMemo(() => sumExpensesByProject(expenses), [expenses]);
+  const receivedByProject = useMemo(() => {
+    const byProject = {};
+    invoices.forEach((inv) => {
+      if (inv.status !== "paid") return;
+      byProject[inv.projectId] = (byProject[inv.projectId] || 0) + (inv.amount || 0);
+    });
+    return byProject;
+  }, [invoices]);
+  const eventCountByProject = useMemo(() => {
+    const byProject = {};
+    events.forEach((ev) => {
+      byProject[ev.projectId] = (byProject[ev.projectId] || 0) + 1;
+    });
+    return byProject;
+  }, [events]);
 
   const rows = useMemo(() => {
     return projects.map((p) => {
       const quote = quotations.find((q) => q.id === p.quotationId);
-      const revenue = quote?.amount || 0;
-      const collected = quote ? getPaymentSummary(quote).totalPaid : 0;
+      const revenue = quote?.total ?? p.quotationAmount ?? 0;
+      const collected = receivedByProject[p.id] || 0;
+      const outstanding = Math.max(0, revenue - collected);
       const cost = costByProject[p.id] || 0;
       const profit = revenue - cost;
       const margin = revenue > 0 ? (profit / revenue) * 100 : null;
-      return { id: p.id, name: p.projectName, revenue, collected, cost, profit, margin };
+      return {
+        id: p.id,
+        name: p.projectName,
+        revenue,
+        collected,
+        outstanding,
+        cost,
+        profit,
+        margin,
+        eventCount: eventCountByProject[p.id] || 0,
+      };
     }).sort((a, b) => b.profit - a.profit);
-  }, [projects, quotations, costByProject]);
+  }, [projects, quotations, costByProject, receivedByProject, eventCountByProject]);
 
   const totals = rows.reduce(
     (acc, r) => ({
       revenue: acc.revenue + r.revenue,
       collected: acc.collected + r.collected,
+      outstanding: acc.outstanding + r.outstanding,
       cost: acc.cost + r.cost,
       profit: acc.profit + r.profit,
     }),
-    { revenue: 0, collected: 0, cost: 0, profit: 0 }
+    { revenue: 0, collected: 0, outstanding: 0, cost: 0, profit: 0 }
   );
 
   // Monthly trend: revenue is attributed to the month a project was
@@ -1010,7 +1523,7 @@ function PnlTab({ projects, quotations, expenses }) {
       const key = monthKey(p.createdAt);
       if (key && byMonth[key]) {
         const quote = quotations.find((q) => q.id === p.quotationId);
-        byMonth[key].revenue += quote?.amount || 0;
+        byMonth[key].revenue += quote?.total ?? p.quotationAmount ?? 0;
       }
     });
 
@@ -1047,21 +1560,21 @@ function PnlTab({ projects, quotations, expenses }) {
       <Card className="mb-6">
         <CardContent className="pt-4">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={monthlyData} margin={{ left: 8, right: 8 }}>
+            <LineChart data={monthlyData} margin={{ left: 8, right: 8 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 12 }} />
               <YAxis tickFormatter={(v) => formatINR(v)} tick={{ fontSize: 11 }} width={70} />
               <Tooltip formatter={(v, name) => [formatINR(v), name]} contentStyle={{ fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="revenue" name="Revenue" fill="oklch(0.55 0.13 60)" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="cost" name="Cost" fill="oklch(0.7 0.15 30)" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="profit" name="Profit" fill="oklch(0.55 0.1 150)" radius={[3, 3, 0, 0]} />
-            </BarChart>
+              <Line type="monotone" dataKey="revenue" name="Revenue" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="cost" name="Cost" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="profit" name="Profit" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
 
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Card>
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Total Revenue</p>
@@ -1072,6 +1585,12 @@ function PnlTab({ projects, quotations, expenses }) {
           <CardContent className="p-3">
             <p className="text-xs text-muted-foreground">Collected</p>
             <p className="text-lg font-semibold text-foreground">{formatINR(totals.collected)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground">Outstanding</p>
+            <p className="text-lg font-semibold text-foreground">{formatINR(totals.outstanding)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -1097,32 +1616,99 @@ function PnlTab({ projects, quotations, expenses }) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-6" />
                 <TableHead>Project</TableHead>
                 <TableHead className="text-right">Revenue</TableHead>
                 <TableHead className="text-right">Collected</TableHead>
+                <TableHead className="text-right">Outstanding</TableHead>
                 <TableHead className="text-right">Cost</TableHead>
                 <TableHead className="text-right">Profit</TableHead>
                 <TableHead className="text-right">Margin</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium text-foreground">{r.name}</TableCell>
-                  <TableCell className="text-right">{formatINR(r.revenue)}</TableCell>
-                  <TableCell className="text-right text-muted-foreground">{formatINR(r.collected)}</TableCell>
-                  <TableCell className="text-right text-muted-foreground">{formatINR(r.cost)}</TableCell>
-                  <TableCell className={`text-right font-medium ${r.profit >= 0 ? "text-foreground" : "text-destructive"}`}>
-                    {formatINR(r.profit)}
-                  </TableCell>
-                  <TableCell className={`text-right ${r.margin === null ? "text-muted-foreground" : r.margin >= 0 ? "text-foreground" : "text-destructive"}`}>
-                    {r.margin === null ? "—" : `${r.margin.toFixed(1)}%`}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {rows.map((r) => {
+                const isExpanded = expandedId === r.id;
+                return (
+                  <Fragment key={r.id}>
+                    <TableRow
+                      className="cursor-pointer"
+                      onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                    >
+                      <TableCell className="text-muted-foreground">
+                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                      </TableCell>
+                      <TableCell className="font-medium text-foreground">{r.name}</TableCell>
+                      <TableCell className="text-right">{formatINR(r.revenue)}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{formatINR(r.collected)}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{formatINR(r.outstanding)}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{formatINR(r.cost)}</TableCell>
+                      <TableCell className={`text-right font-medium ${r.profit >= 0 ? "text-foreground" : "text-destructive"}`}>
+                        {formatINR(r.profit)}
+                      </TableCell>
+                      <TableCell className={`text-right ${r.margin === null ? "text-muted-foreground" : r.margin >= 0 ? "text-foreground" : "text-destructive"}`}>
+                        {r.margin === null ? "—" : `${r.margin.toFixed(1)}%`}
+                      </TableCell>
+                    </TableRow>
+                    {isExpanded && (
+                      <TableRow>
+                        <TableCell colSpan={8} className="bg-muted/40 p-0">
+                          <ProjectBreakdown project={r} expenses={expenses} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                );
+              })}
             </TableBody>
           </Table>
         </Card>
+      )}
+    </div>
+  );
+}
+
+/** Per-project cost breakdown shown inline when a P&L row is expanded. */
+function ProjectBreakdown({ project, expenses }) {
+  const projectExpenses = useMemo(
+    () => expenses.filter((e) => e.projectId === project.id),
+    [expenses, project.id]
+  );
+
+  const byCategory = useMemo(() => {
+    const map = {};
+    projectExpenses.forEach((e) => {
+      const label = e.type === "freelancer_payout" ? "Freelancer Payouts" : e.type === "advance" ? "Advances" : e.category || "Misc";
+      map[label] = (map[label] || 0) + (e.amount || 0);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [projectExpenses]);
+
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {project.eventCount} event{project.eventCount !== 1 ? "s" : ""} · {projectExpenses.length} expense{projectExpenses.length !== 1 ? "s" : ""} logged
+        </p>
+        <Link
+          href={`/projects/${project.id}`}
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+        >
+          View project <ExternalLink className="h-3 w-3" />
+        </Link>
+      </div>
+      {byCategory.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No costs logged against this project yet.</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3">
+          {byCategory.map(([label, amount]) => (
+            <div key={label} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-muted-foreground">{label}</span>
+              <span className="font-medium text-foreground">{formatINR(amount)}</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

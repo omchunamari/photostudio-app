@@ -1,5 +1,6 @@
 import { getAllProjects } from "@/lib/firebase/projects";
-import { getAllQuotations, getPaymentSummary } from "@/lib/firebase/quotations";
+import { getAllQuotations } from "@/lib/firebase/quotations";
+import { getAllInvoices, sumReceived } from "@/lib/firebase/invoices";
 import { getAllEvents } from "@/lib/firebase/events";
 import { getAllExpenses } from "@/lib/firebase/expenses";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
@@ -73,9 +74,10 @@ function last6MonthKeys() {
  * }
  */
 export async function loadFinanceOverview(startYear) {
-  const [projects, quotations, events, expenses, freelancers] = await Promise.all([
+  const [projects, quotations, invoices, events, expenses, freelancers] = await Promise.all([
     getAllProjects(),
     getAllQuotations(),
+    getAllInvoices(),
     getAllEvents(),
     getAllExpenses(),
     getAllFreelancers(),
@@ -83,33 +85,29 @@ export async function loadFinanceOverview(startYear) {
 
   const quotesById = Object.fromEntries(quotations.map((q) => [q.id, q]));
   const fyProjects = projects.filter((p) => inFY(p.createdAt, startYear));
+  const fyProjectIds = new Set(fyProjects.map((p) => p.id));
 
-  // Total Revenue / Received on Bookings / Outstanding — scoped to
-  // projects *booked* (created) within the selected FY.
-  let totalRevenue = 0;
-  let receivedOnBookings = 0;
-  fyProjects.forEach((p) => {
+  // Total Revenue — projects *booked* (created) within the selected FY.
+  const totalRevenue = fyProjects.reduce((sum, p) => {
     const quote = p.quotationId ? quotesById[p.quotationId] : null;
-    const revenue = quote?.total ?? p.quotationAmount ?? 0;
-    totalRevenue += revenue;
-    receivedOnBookings += quote ? getPaymentSummary(quote).totalPaid : 0;
-  });
+    return sum + (quote?.total ?? p.quotationAmount ?? 0);
+  }, 0);
+
+  // Received on Bookings — paid invoices (see the "Mark Paid" toggle on
+  // each project's Invoices panel) belonging to projects booked in this FY.
+  const receivedOnBookings = sumReceived(invoices.filter((inv) => fyProjectIds.has(inv.projectId)));
   const outstanding = Math.max(0, totalRevenue - receivedOnBookings);
 
-  // Cash Received / monthly trend — actual cash flow: every paid
-  // installment across ALL quotations whose paidDate falls in the
-  // relevant window, regardless of which FY the underlying project was
-  // booked in.
-  let cashReceived = 0;
+  // Cash Received / monthly trend — actual cash flow: every paid invoice
+  // (any project) whose invoice date falls in the relevant window.
+  const paidInvoices = invoices.filter((inv) => inv.status === "paid");
+  const cashReceived = sumReceived(paidInvoices.filter((inv) => inFY(inv.date, startYear)));
+
   const months = last6MonthKeys();
   const byMonth = Object.fromEntries(months.map((m) => [m.key, 0]));
-  quotations.forEach((q) => {
-    (q.installments || []).forEach((inst) => {
-      if (!inst.paid || !inst.paidDate) return;
-      if (inFY(inst.paidDate, startYear)) cashReceived += Number(inst.amount) || 0;
-      const mk = monthKeyOf(inst.paidDate);
-      if (mk && mk in byMonth) byMonth[mk] += Number(inst.amount) || 0;
-    });
+  paidInvoices.forEach((inv) => {
+    const mk = monthKeyOf(inv.date);
+    if (mk && mk in byMonth) byMonth[mk] += Number(inv.amount) || 0;
   });
   const monthly = months.map((m) => ({ label: m.label, amount: byMonth[m.key] }));
 
