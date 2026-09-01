@@ -131,6 +131,28 @@ export async function POST(request) {
       addedAt: now,
     });
 
+    // Store the raw submission as its own record, independent of how the
+    // answers got mapped onto the lead — so every question and answer is
+    // still visible on the Responses tab even if the form's questions
+    // change (or a mapping is edited/removed) after this was submitted.
+    const answers = fields
+      .filter((field) => !LOCKED_FIELD_KEYS.includes(field.key))
+      .map((field) => ({
+        key: field.key,
+        label: field.label,
+        type: field.type,
+        value: values[field.key] === undefined || values[field.key] === null ? "" : String(values[field.key]).trim(),
+      }))
+      .filter((a) => a.value !== "");
+
+    await adminDb.collection("enquiryResponses").add({
+      leadId: leadRef.id,
+      clientName: leadData.clientName,
+      phone: leadData.phone,
+      answers,
+      createdAt: now,
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Public enquiry submit error:", error);

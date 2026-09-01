@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -22,6 +23,21 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -29,7 +45,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import RichTextEditor from "@/components/quotes/RichTextEditor";
-import { Plus, Trash2, X, CalendarOff, Copy, Lock, ChevronUp, ChevronDown } from "lucide-react";
+import { Plus, Trash2, X, CalendarOff, Copy, Lock, ChevronUp, ChevronDown, Eye, Download, Search } from "lucide-react";
 import { toast } from "sonner";
 import {
   getOrgQuoteSettings,
@@ -51,9 +67,11 @@ import { getOrgHolidays, saveOrgHolidays } from "@/lib/firebase/holidays";
 import { formatMonthDay, sortByMonthDay } from "@/lib/holidays";
 import { blankEvent } from "@/lib/constants/quotations";
 import { getEnquiryFormConfig, saveEnquiryFormConfig } from "@/lib/firebase/enquiryForm";
+import { getAllEnquiryResponses } from "@/lib/firebase/enquiryResponses";
 import {
   DEFAULT_ENQUIRY_FORM,
   ENQUIRY_FIELD_TYPES,
+  ENQUIRY_MAPS_TO_OPTIONS,
   LOCKED_FIELD_KEYS,
   slugifyFieldKey,
 } from "@/lib/constants/enquiryForm";
@@ -74,6 +92,7 @@ function SettingsContent() {
           <TabsTrigger value="schedules">Payment Schedules</TabsTrigger>
           <TabsTrigger value="holidays">Holidays</TabsTrigger>
           <TabsTrigger value="enquiryForm">Enquiry Form</TabsTrigger>
+          <TabsTrigger value="enquiryResponses">Responses</TabsTrigger>
         </TabsList>
 
         <TabsContent value="org">
@@ -93,6 +112,9 @@ function SettingsContent() {
         </TabsContent>
         <TabsContent value="enquiryForm">
           <EnquiryFormPanel />
+        </TabsContent>
+        <TabsContent value="enquiryResponses">
+          <EnquiryResponsesPanel />
         </TabsContent>
       </Tabs>
     </AppShell>
@@ -1058,6 +1080,34 @@ function EnquiryFormPanel() {
                 </div>
               )}
 
+              {!field.locked && (
+                <div className="ml-8">
+                  <Label className="text-xs">Save this answer to</Label>
+                  <Select
+                    value={field.mapsTo || "custom"}
+                    onValueChange={(v) => updateField(field.id, { mapsTo: v })}
+                  >
+                    <SelectTrigger className="w-56">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ENQUIRY_MAPS_TO_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {field.mapsTo === "eventDetails"
+                      ? "Answers are added to the lead's Notes as-is, without a label."
+                      : field.mapsTo && field.mapsTo !== "custom"
+                      ? `Answers fill the lead's ${ENQUIRY_MAPS_TO_OPTIONS.find((o) => o.value === field.mapsTo)?.label} field directly.`
+                      : "Answers are added to the lead's Notes, labeled with this question."}
+                  </p>
+                </div>
+              )}
+
               <label className="ml-8 flex w-fit items-center gap-2 text-sm text-foreground">
                 <Checkbox
                   checked={field.locked ? true : field.required}
@@ -1082,6 +1132,155 @@ function EnquiryFormPanel() {
           {saving ? "Saving..." : "Save Form"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+function EnquiryResponsesPanel() {
+  const [responses, setResponses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const router = useRouter();
+
+  useEffect(() => {
+    getAllEnquiryResponses()
+      .then(setResponses)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = responses.filter((r) => {
+    const term = search.trim().toLowerCase();
+    if (!term) return true;
+    return (
+      r.clientName?.toLowerCase().includes(term) ||
+      r.phone?.toLowerCase().includes(term)
+    );
+  });
+
+  function handleExport() {
+    const allLabels = [];
+    const seen = new Set();
+    for (const r of responses) {
+      for (const a of r.answers || []) {
+        if (!seen.has(a.key)) {
+          seen.add(a.key);
+          allLabels.push(a);
+        }
+      }
+    }
+    const header = ["Submitted", "Name", "Phone", ...allLabels.map((a) => a.label)];
+    const rows = responses.map((r) => {
+      const byKey = Object.fromEntries((r.answers || []).map((a) => [a.key, a.value]));
+      return [
+        (r.createdAt || "").slice(0, 16).replace("T", " "),
+        r.clientName || "",
+        r.phone || "",
+        ...allLabels.map((a) => byKey[a.key] || ""),
+      ];
+    });
+    const csv = [header, ...rows]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "enquiry-responses.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="mt-4 flex flex-col gap-4">
+      <p className="text-sm text-muted-foreground">
+        Every submission of the public enquiry form, exactly as answered — including questions that were later
+        changed or removed from the form.
+      </p>
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:w-64">
+          <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or phone"
+            className="pl-8"
+          />
+        </div>
+        <Button size="sm" variant="outline" onClick={handleExport} disabled={!responses.length}>
+          <Download className="h-3.5 w-3.5" /> Export CSV
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      ) : filtered.length === 0 ? (
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            {responses.length === 0 ? "No form submissions yet." : "No responses match your search."}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Submitted</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Phone</TableHead>
+                <TableHead className="w-8"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="text-muted-foreground">
+                    {(r.createdAt || "").slice(0, 16).replace("T", " ")}
+                  </TableCell>
+                  <TableCell className="font-medium text-foreground">{r.clientName || "—"}</TableCell>
+                  <TableCell className="text-muted-foreground">{r.phone || "—"}</TableCell>
+                  <TableCell>
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button variant="ghost" size="icon-sm">
+                          <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>{r.clientName || "Enquiry response"}</DialogTitle>
+                        </DialogHeader>
+                        <div className="flex flex-col gap-3">
+                          <div>
+                            <p className="text-xs text-muted-foreground">Phone</p>
+                            <p className="text-sm text-foreground">{r.phone || "—"}</p>
+                          </div>
+                          {(r.answers || []).map((a) => (
+                            <div key={a.key}>
+                              <p className="text-xs text-muted-foreground">{a.label}</p>
+                              <p className="whitespace-pre-wrap text-sm text-foreground">{a.value || "—"}</p>
+                            </div>
+                          ))}
+                          {r.leadId && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="mt-1 w-fit"
+                              onClick={() => router.push(`/leads/${r.leadId}`)}
+                            >
+                              View lead
+                            </Button>
+                          )}
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
     </div>
   );
 }

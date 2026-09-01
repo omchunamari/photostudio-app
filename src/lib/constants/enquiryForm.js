@@ -15,6 +15,21 @@ export const ENQUIRY_FIELD_TYPES = [
 // state that produces leads without contact info.
 export const LOCKED_FIELD_KEYS = ["firstName", "lastName", "whatsappNumber"];
 
+// Where an unlocked question's answer lands on the lead it creates.
+// "custom" (the default for any new question you add) folds the answer
+// into the lead's Notes, prefixed with the question's label so several
+// custom answers stay distinguishable from each other. Every other option
+// writes straight into that lead attribute — map only one question per
+// option, since the last one submitted wins if two questions share a target.
+export const ENQUIRY_MAPS_TO_OPTIONS = [
+  { value: "custom", label: "Notes (labeled)" },
+  { value: "email", label: "Email" },
+  { value: "projectType", label: "Project Type" },
+  { value: "eventDate", label: "Event Date" },
+  { value: "budget", label: "Budget" },
+  { value: "eventDetails", label: "Notes (unlabeled)" },
+];
+
 // Shipped as the starting configuration the first time anyone opens the
 // Enquiry Form settings tab / the first time the public form is loaded and
 // no orgSettings/enquiryForm doc exists yet.
