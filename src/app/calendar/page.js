@@ -11,14 +11,15 @@ import StatusBadge from "@/components/ui/status-badge";
 import { getAllEvents, getEventsForEmployee } from "@/lib/firebase/events";
 import { getProjectsForLeader } from "@/lib/firebase/projects";
 import { getAllLeaveRequests, getLeaveHistoryForEmployee } from "@/lib/firebase/leave";
-import { getAllTasks, getTasksForEmployee } from "@/lib/firebase/postProduction";
 import { getAllLeads } from "@/lib/firebase/leads";
+import { getAllDeliverables, getDeliverablesForEmployee } from "@/lib/firebase/deliverables";
+import { getOrgHolidays } from "@/lib/firebase/holidays";
+import { getHolidayForDate } from "@/lib/holidays";
 import { isEventPast } from "@/lib/status";
 import { getISTDateStr } from "@/lib/dateIST";
 import {
   ChevronLeft,
   ChevronRight,
-  Clapperboard,
   CalendarDays,
   ListChecks,
   Target,
@@ -28,8 +29,8 @@ import {
 // HR sees org-wide leave (privacy boundary carried over from the Leave
 // module — PMs don't get org-wide leave visibility there either).
 const HR_ROLES = ["super_admin", "admin", "hr"];
-// Admin/PM/HR all get the org-wide events + task view via isCalendarViewer()
-// on the backend; everyone else only sees what they're personally on.
+// Admin/PM/HR all get the org-wide events view via isCalendarViewer() on
+// the backend; everyone else only sees what they're personally on.
 const ORG_WIDE_ROLES = ["super_admin", "admin", "project_manager", "hr"];
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -68,8 +69,9 @@ function CalendarContent() {
   });
 
   const [events, setEvents] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [leaveRequests, setLeaveRequests] = useState([]);
-  const [tasks, setTasks] = useState([]);
+  const [deliverables, setDeliverables] = useState([]);
   // Leads only load for project-ops roles — the leads collection's
   // Firestore rules don't grant read access to HR or regular employees,
   // so requesting it for anyone else would just fail.
@@ -82,6 +84,10 @@ function CalendarContent() {
   const [error, setError] = useState("");
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [showPast, setShowPast] = useState(false);
+
+  useEffect(() => {
+    getOrgHolidays().then(setHolidays);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,14 +103,14 @@ function CalendarContent() {
       const results = await Promise.allSettled([
         isOrgWide ? getAllEvents() : getEventsForEmployee(user.uid),
         isHRView ? getAllLeaveRequests(cursor.year) : getLeaveHistoryForEmployee(user.uid),
-        isOrgWide ? getAllTasks() : getTasksForEmployee(user.uid),
         isAdminOrPM ? Promise.resolve([]) : getProjectsForLeader(user.uid),
         isAdminOrPM ? getAllLeads() : Promise.resolve([]),
+        isOrgWide ? getAllDeliverables() : getDeliverablesForEmployee(user.uid),
       ]);
       if (cancelled) return;
 
-      const [evtsResult, leavesResult, tasksResult, ledResult, leadsResult] = results;
-      const labels = ["events", "leave", "tasks", "your led projects", "leads"];
+      const [evtsResult, leavesResult, ledResult, leadsResult, deliverablesResult] = results;
+      const labels = ["events", "leave", "your led projects", "leads", "deliverables"];
       const failed = results
         .map((r, i) => (r.status === "rejected" ? labels[i] : null))
         .filter(Boolean);
@@ -115,11 +121,11 @@ function CalendarContent() {
           leavesResult.value.filter((l) => l.status === "approved" || l.status === "pending")
         );
       }
-      if (tasksResult.status === "fulfilled") setTasks(tasksResult.value);
       if (ledResult.status === "fulfilled") {
         setLedProjectIds(new Set(ledResult.value.map((p) => p.id)));
       }
       if (leadsResult.status === "fulfilled") setLeads(leadsResult.value);
+      if (deliverablesResult.status === "fulfilled") setDeliverables(deliverablesResult.value);
 
       if (failed.length > 0) {
         // Log the underlying reasons for debugging (e.g. a missing
@@ -155,6 +161,18 @@ function CalendarContent() {
     return null;
   }
 
+  // Same idea for deliverables: only link to the full project page for
+  // roles that can actually open it — isOrgWide (admin/PM/HR, matching
+  // isCalendarViewer on the rules side) or the project's own leader. A
+  // deliverable assignee who's neither would hit a permission error on
+  // that page, so they get a plain (non-clickable) card instead.
+  function deliverableHref(dl) {
+    if (isOrgWide || ledProjectIds.has(dl.projectId)) {
+      return `/projects/${dl.projectId}`;
+    }
+    return null;
+  }
+
   // Bucket everything by date string for fast day lookups. Past events
   // (Delivered/Archived) are excluded unless "Show past" is on — keeps
   // the calendar focused on what's actually coming up by default.
@@ -162,7 +180,7 @@ function CalendarContent() {
     const visibleEvents = showPast ? events : events.filter((ev) => !isEventPast(ev));
     const map = {};
     const ensure = (d) => {
-      if (!map[d]) map[d] = { events: [], leaves: [], tasks: [], leads: [] };
+      if (!map[d]) map[d] = { events: [], leaves: [], leads: [], deliverables: [] };
       return map[d];
     };
     visibleEvents.forEach((ev) => {
@@ -175,15 +193,22 @@ function CalendarContent() {
         ensure(d).leaves.push(lv);
       });
     });
-    tasks.forEach((t) => {
-      if (t.dueDate) ensure(t.dueDate).tasks.push(t);
-    });
     leads.forEach((ld) => {
       if (ld.eventDate) ensure(ld.eventDate).leads.push({ ...ld, kind: "event" });
       if (ld.followUpDate) ensure(ld.followUpDate).leads.push({ ...ld, kind: "follow-up" });
     });
+    // Post-production deliverables: plotted on their deadline (the date
+    // that actually matters for "is this late"), same way tasks use
+    // dueDate. Done deliverables are skipped by default along with past
+    // events unless "Show past" is on, so a wrapped-up delivery doesn't
+    // keep cluttering the calendar.
+    deliverables.forEach((dl) => {
+      if (!dl.deadline) return;
+      if (!showPast && dl.status === "Done") return;
+      ensure(dl.deadline).deliverables.push(dl);
+    });
     return map;
-  }, [events, leaveRequests, tasks, leads, showPast]);
+  }, [events, leaveRequests, leads, deliverables, showPast]);
 
   const { year, month } = cursor;
   const firstOfMonth = new Date(year, month, 1);
@@ -208,7 +233,9 @@ function CalendarContent() {
     setCursor({ year: y, month: m });
   }
 
-  const selectedInfo = dayMap[selectedDate] || { events: [], leaves: [], tasks: [], leads: [] };
+  const selectedInfo = dayMap[selectedDate] || { events: [], leaves: [], leads: [], deliverables: [] };
+  const selectedHoliday = getHolidayForDate(selectedDate, holidays);
+  const selectedIsSunday = new Date(`${selectedDate}T12:00:00`).getDay() === 0;
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -272,34 +299,77 @@ function CalendarContent() {
 
             <div className="grid grid-cols-7 gap-1">
               {cells.map((d, idx) => {
-                if (d === null) return <div key={`empty-${idx}`} className="aspect-square" />;
+                if (d === null) return <div key={`empty-${idx}`} className="min-h-[5.5rem]" />;
                 const dateStr = toDateStr(year, month, d);
                 const info = dayMap[dateStr];
                 const isToday = dateStr === todayStr;
                 const isSelected = dateStr === selectedDate;
-                const hasEvents = info?.events?.length > 0;
-                const hasLeaves = info?.leaves?.length > 0;
-                const hasTasks = info?.tasks?.length > 0;
-                const hasLeads = info?.leads?.length > 0;
+                const isOffDay = new Date(`${dateStr}T12:00:00`).getDay() === 0;
+                const holiday = getHolidayForDate(dateStr, holidays);
+
+                // Flatten the day's items into one ordered, color-coded list so
+                // the cell itself shows *what's* happening, not just dots
+                // hinting that something is. Events lead (most decision-
+                // relevant), then deliverables, leave, then leads. Capped at 3
+                // with a "+N more" so a heavy day doesn't blow out the grid —
+                // full detail is still one click away in the side panel.
+                const dayItems = info
+                  ? [
+                      ...info.events.map((ev) => ({ label: ev.eventName, bg: "bg-accent/10", text: "text-accent" })),
+                      ...info.deliverables.map((dl) => ({
+                        label: dl.type,
+                        bg: "bg-[oklch(0.6_0.14_220)]/10",
+                        text: "text-[oklch(0.6_0.14_220)]",
+                      })),
+                      ...info.leaves.map((lv) => ({
+                        label: lv.employeeName || "On leave",
+                        bg: "bg-destructive/10",
+                        text: "text-destructive",
+                      })),
+                      ...info.leads.map((ld) => ({
+                        label: ld.clientName,
+                        bg: "bg-[oklch(0.7_0.15_260)]/10",
+                        text: "text-[oklch(0.7_0.15_260)]",
+                      })),
+                    ]
+                  : [];
+                const visibleItems = dayItems.slice(0, 3);
+                const extraCount = dayItems.length - visibleItems.length;
 
                 return (
                   <button
                     key={dateStr}
                     onClick={() => setSelectedDate(dateStr)}
-                    className={`flex aspect-square flex-col items-center justify-start gap-1 rounded-md border p-1 text-xs transition-colors ${
+                    title={holiday ? holiday.name : undefined}
+                    className={`flex min-h-[5.5rem] flex-col items-stretch gap-1 rounded-md border p-1.5 text-left text-xs transition-colors ${
                       isSelected
                         ? "border-accent bg-accent/10"
                         : isToday
                         ? "border-accent/50 bg-muted"
+                        : holiday
+                        ? "border-transparent bg-destructive/5"
                         : "border-transparent hover:bg-muted"
                     }`}
                   >
-                    <span className={`font-medium ${isToday ? "text-accent" : "text-foreground"}`}>{d}</span>
-                    <div className="flex flex-wrap items-center justify-center gap-0.5">
-                      {hasEvents && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
-                      {hasLeaves && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
-                      {hasTasks && <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.55_0.09_150)]" />}
-                      {hasLeads && <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.7_0.15_260)]" />}
+                    <span
+                      className={`self-start font-medium ${
+                        isToday ? "text-accent" : holiday || isOffDay ? "text-destructive/70" : "text-foreground"
+                      }`}
+                    >
+                      {d}
+                    </span>
+                    <div className="flex flex-1 flex-col gap-0.5 overflow-hidden">
+                      {visibleItems.map((item, i) => (
+                        <span
+                          key={i}
+                          className={`truncate rounded-sm px-1 py-0.5 text-left text-[10px] font-medium leading-tight ${item.bg} ${item.text}`}
+                        >
+                          {item.label}
+                        </span>
+                      ))}
+                      {extraCount > 0 && (
+                        <span className="px-1 text-[10px] text-muted-foreground">+{extraCount} more</span>
+                      )}
                     </div>
                   </button>
                 );
@@ -314,7 +384,7 @@ function CalendarContent() {
                 <span className="h-2 w-2 rounded-full bg-destructive" /> Leave
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-[oklch(0.55_0.09_150)]" /> Task due
+                <span className="h-2 w-2 rounded-full bg-[oklch(0.6_0.14_220)]" /> Deliverable deadline
               </span>
               {isAdminOrPM && (
                 <span className="flex items-center gap-1.5">
@@ -326,31 +396,43 @@ function CalendarContent() {
         </Card>
 
         {/* Day detail panel */}
-        <Card>
-          <CardContent>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-heading text-sm font-semibold text-foreground">
+        <Card className="overflow-hidden py-0">
+          <div className="flex items-center justify-between gap-2 bg-muted/60 px-4 py-3 sm:px-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-heading text-base font-semibold text-foreground">
                 {new Date(selectedDate).toLocaleDateString("en-IN", {
                   weekday: "long",
                   day: "numeric",
                   month: "short",
                 })}
+                {selectedDate === todayStr && (
+                  <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide text-accent">
+                    Today
+                  </span>
+                )}
               </h3>
-              {selectedDate !== todayStr && (
-                <button
-                  onClick={() => setSelectedDate(todayStr)}
-                  className="text-xs text-accent hover:underline"
-                >
-                  Today
-                </button>
+              {(selectedHoliday || selectedIsSunday) && (
+                <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-destructive">
+                  {selectedHoliday ? selectedHoliday.name : "Weekly Off"}
+                </span>
               )}
             </div>
-
+            {selectedDate !== todayStr && (
+              <button
+                onClick={() => setSelectedDate(todayStr)}
+                className="text-xs text-accent hover:underline"
+              >
+                Jump to today
+              </button>
+            )}
+          </div>
+          <CardContent className="pt-4">
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : (
               <div className="flex flex-col gap-4">
                 <DaySection
+                  first
                   icon={<CalendarDays className="h-3.5 w-3.5" />}
                   title="Shoots / Events"
                   empty="No events"
@@ -408,21 +490,43 @@ function CalendarContent() {
                 </DaySection>
 
                 <DaySection
-                  icon={<Clapperboard className="h-3.5 w-3.5" />}
-                  title="Tasks Due"
-                  empty="No tasks due"
+                  icon={<ListChecks className="h-3.5 w-3.5" />}
+                  title="Deliverable Deadlines"
+                  empty="No deliverables due"
                 >
-                  {selectedInfo.tasks.map((t) => (
-                    <div key={t.id} className="rounded-md border border-border p-2">
-                      <p className="text-sm font-medium text-foreground">{t.title}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {t.taskType} · {t.assignedName}
-                      </p>
-                      <div className="mt-1">
-                        <StatusBadge status={t.status} />
-                      </div>
-                    </div>
-                  ))}
+                  {selectedInfo.deliverables.map((dl) => {
+                    const overdue = dl.status !== "Done" && dl.deadline < todayStr;
+                    const href = deliverableHref(dl);
+                    const CardTag = href ? Link : "div";
+                    return (
+                      <CardTag
+                        key={dl.id}
+                        {...(href ? { href } : {})}
+                        className={`flex items-start justify-between gap-2 rounded-md border border-border p-2 ${
+                          href ? "transition-colors hover:border-accent/50 hover:bg-muted" : ""
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground">{dl.type}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {dl.projectName} · {dl.clientName}
+                            {dl.assignedName ? ` · ${dl.assignedName}` : ""}
+                          </p>
+                          <div className="mt-1 flex items-center gap-2">
+                            <StatusBadge status={dl.status} />
+                            {overdue && (
+                              <span className="text-[10px] font-medium uppercase tracking-wide text-destructive">
+                                Overdue
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {href && (
+                          <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                        )}
+                      </CardTag>
+                    );
+                  })}
                 </DaySection>
 
                 {isAdminOrPM && (
@@ -460,18 +564,26 @@ function CalendarContent() {
   );
 }
 
-function DaySection({ icon, title, empty, children }) {
-  const hasChildren = Array.isArray(children) ? children.length > 0 : !!children;
+function DaySection({ icon, title, empty, children, first }) {
+  const count = Array.isArray(children) ? children.length : children ? 1 : 0;
+  const hasChildren = count > 0;
   return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {icon}
-        {title}
+    <div className={first ? "" : "border-t border-border pt-4"}>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {icon}
+          {title}
+        </div>
+        {hasChildren && (
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+            {count}
+          </span>
+        )}
       </div>
       {hasChildren ? (
         <div className="flex flex-col gap-2">{children}</div>
       ) : (
-        <p className="text-xs text-muted-foreground">{empty}</p>
+        <p className="text-xs text-muted-foreground/80">{empty}</p>
       )}
     </div>
   );

@@ -27,7 +27,7 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
-import { getAllEvents } from "@/lib/firebase/events";
+import { getAllEvents, sumEventTeamCost } from "@/lib/firebase/events";
 import { isEventPast } from "@/lib/status";
 import { getAllProjects } from "@/lib/firebase/projects";
 import { getAllQuotations } from "@/lib/firebase/quotations";
@@ -42,10 +42,11 @@ import {
   sumExpensesByProject,
   EXPENSE_TYPES,
   MANUAL_EXPENSE_CATEGORIES,
+  getAllExpenseCategories,
 } from "@/lib/firebase/expenses";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
-import { getAllTasks, TASK_STATUSES, TASK_TYPES, TASK_PRIORITIES, isOverdue } from "@/lib/firebase/postProduction";
+import { getAllDeliverables, DELIVERABLE_STATUSES, DELIVERABLE_TYPES } from "@/lib/firebase/deliverables";
 import { toast } from "sonner";
 import {
   LineChart,
@@ -161,6 +162,7 @@ function AnalyticsContent() {
   const [freelancers, setFreelancers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [expenseCategories, setExpenseCategories] = useState(MANUAL_EXPENSE_CATEGORIES);
 
   useEffect(() => {
     if (!isAllowed) {
@@ -170,7 +172,7 @@ function AnalyticsContent() {
     async function load() {
       setLoading(true);
       try {
-        const [evts, projs, quotes, invs, exps, emps, frls, tsks, lds] = await Promise.all([
+        const [evts, projs, quotes, invs, exps, emps, frls, lds, cats] = await Promise.all([
           getAllEvents(),
           getAllProjects(),
           getAllQuotations(),
@@ -178,9 +180,12 @@ function AnalyticsContent() {
           getAllExpenses(),
           getAllEmployees(),
           getAllFreelancers(),
-          getAllTasks(),
           getAllLeads(),
+          getAllExpenseCategories(),
         ]);
+        // Deliverables are fetched per-project (see getAllDeliverables), so
+        // it runs after projs is available rather than inside the Promise.all above.
+        const tsks = await getAllDeliverables(projs);
         setEvents(evts);
         setProjects(projs);
         setQuotations(quotes);
@@ -188,6 +193,7 @@ function AnalyticsContent() {
         setExpenses(exps);
         setEmployees(emps);
         setFreelancers(frls);
+        setExpenseCategories(cats);
         setTasks(tsks);
         setLeads(lds);
       } catch (err) {
@@ -252,6 +258,7 @@ function AnalyticsContent() {
           events={events}
           user={user}
           onChanged={refreshExpenses}
+          expenseCategories={expenseCategories}
         />
       ) : (
         <PnlTab projects={projects} quotations={quotations} invoices={invoices} expenses={expenses} events={events} />
@@ -272,15 +279,38 @@ function TeamLoadTab({ events, tasks, employees }) {
   const [metric, setMetric] = useState("all"); // "all" | "events" | "days" | "tasks"
   const [personType, setPersonType] = useState("all"); // "all" | "employee" | "freelancer"
   // Defaults to current workload (excludes Delivered/Archived events, and
-  // for tasks excludes Completed) since that's what rate negotiation
+  // for tasks excludes Done) since that's what rate negotiation
   // usually needs — "how much is this person carrying right now".
   // Employee Value/P&L intentionally don't get this filter; those need
   // full lifetime history, not just active work.
   const [activeOnly, setActiveOnly] = useState(true);
+  const [range, setRange] = useState("6"); // months shown in the trend chart below
+
+  // Org-wide monthly trend — how load has moved over time, independent of
+  // activeOnly/personType (those scope the per-person snapshot below, but a
+  // historical trend should show the full picture for each month it covers).
+  // Events are bucketed by shoot date (eventStartDate); deliverables by
+  // createdAt, same as the Post-Production tab's monthly chart.
+  const monthlyData = useMemo(() => {
+    const months = lastNMonthKeys(Number(range));
+    const byMonth = Object.fromEntries(months.map((k) => [k, { events: 0, days: 0, tasks: 0 }]));
+    events.forEach((ev) => {
+      const key = monthKey(ev.eventStartDate);
+      if (key && byMonth[key]) {
+        byMonth[key].events += 1;
+        byMonth[key].days += ev.shootDays || 1;
+      }
+    });
+    tasks.forEach((t) => {
+      const key = monthKey(t.createdAt);
+      if (key && byMonth[key]) byMonth[key].tasks += 1;
+    });
+    return months.map((key) => ({ month: monthLabel(key), ...byMonth[key] }));
+  }, [events, tasks, range]);
 
   const data = useMemo(() => {
     const scopedEvents = activeOnly ? events.filter((ev) => !isEventPast(ev)) : events;
-    const scopedTasks = activeOnly ? tasks.filter((t) => t.status !== "Completed") : tasks;
+    const scopedTasks = activeOnly ? tasks.filter((t) => t.status !== "Done") : tasks;
 
     const byPerson = {};
     function ensure(uid, name, role, type) {
@@ -344,6 +374,36 @@ function TeamLoadTab({ events, tasks, employees }) {
 
   return (
     <div>
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-foreground">Team load — monthly trend</h3>
+        <Select value={range} onValueChange={setRange}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue>{(v) => (v === "6" ? "Last 6 months" : "Last 12 months")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="6">Last 6 months</SelectItem>
+            <SelectItem value="12">Last 12 months</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={monthlyData} margin={{ left: 8, right: 16 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="events" name="Events" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="days" name="Shoot Days" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="tasks" name="Post-Prod Tasks" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <h3 className="mb-4 text-sm font-medium text-foreground">By person — current snapshot</h3>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={metric} onValueChange={setMetric}>
           <SelectTrigger className="w-[200px]">
@@ -385,7 +445,7 @@ function TeamLoadTab({ events, tasks, employees }) {
             onChange={(e) => setActiveOnly(e.target.checked)}
             className="h-3.5 w-3.5 rounded border-border"
           />
-          Active only (exclude Delivered/Archived events and Completed tasks)
+          Active only (exclude Delivered/Archived events and Done tasks)
         </label>
       </div>
 
@@ -475,7 +535,7 @@ function EmployeeValueTab({ events, projects, quotations }) {
     const byPerson = {};
     projects.forEach((p) => {
       const quote = quotations.find((q) => q.id === p.quotationId);
-      const revenue = quote?.total ?? p.quotationAmount ?? 0;
+      const revenue = p.quotationAmount ?? quote?.total ?? 0;
       if (!revenue) return;
       const projectEvents = events.filter((ev) => ev.projectId === p.id);
       const teamSet = new Map();
@@ -592,17 +652,26 @@ function EmployeeValueTab({ events, projects, quotations }) {
 // ---------------------------------------------------------------------
 // Tab 3: Sales Funnel — new. Leads by stage/source, quotation status
 // breakdown, win rate, and a monthly new-leads-vs-won trend. Uses
-// LEAD_STATUSES as the funnel order (New Inquiry -> ... -> Won/Lost) and
-// QUOTE_STATUSES for the quotation breakdown.
+// LEAD_STATUSES as the funnel order (New Inquiry -> ... -> Converted/
+// Lost/No Response) and QUOTE_STATUSES for the quotation breakdown.
+// "Converted" is the current name for a won lead; "Won" is kept as a
+// synonym so leads created before the pipeline rename still count
+// correctly (see constants/leads.js).
 // ---------------------------------------------------------------------
+const isLeadWon = (l) => l.status === "Converted" || l.status === "Won";
+const isLeadClosed = (l) => isLeadWon(l) || l.status === "Lost" || l.status === "No Response";
+
 function SalesFunnelTab({ leads, quotations }) {
   const [range, setRange] = useState("6");
 
   const stageCounts = useMemo(() => {
     const counts = Object.fromEntries(LEAD_STATUSES.map((s) => [s, 0]));
     leads.forEach((l) => {
-      if (counts[l.status] !== undefined) counts[l.status] += 1;
-      else counts[l.status] = (counts[l.status] || 0) + 1;
+      // Fold the older "Won" value into the current "Converted" stage so
+      // the funnel chart doesn't show a phantom bar outside the pipeline.
+      const stage = l.status === "Won" ? "Converted" : l.status;
+      if (counts[stage] !== undefined) counts[stage] += 1;
+      else counts[stage] = (counts[stage] || 0) + 1;
     });
     return LEAD_STATUSES.map((s) => ({ stage: s, count: counts[s] || 0 }));
   }, [leads]);
@@ -614,7 +683,7 @@ function SalesFunnelTab({ leads, quotations }) {
       if (!bySource[key]) bySource[key] = { source: key, count: 0, won: 0, lost: 0, budget: 0 };
       bySource[key].count += 1;
       bySource[key].budget += l.budget || 0;
-      if (l.status === "Won") bySource[key].won += 1;
+      if (isLeadWon(l)) bySource[key].won += 1;
       if (l.status === "Lost") bySource[key].lost += 1;
     });
     return Object.values(bySource).sort((a, b) => b.count - a.count);
@@ -638,7 +707,7 @@ function SalesFunnelTab({ leads, quotations }) {
       if (key && byMonth[key]) byMonth[key].newLeads += 1;
     });
     leads.forEach((l) => {
-      if (l.status !== "Won") return;
+      if (!isLeadWon(l)) return;
       const key = monthKey(l.updatedAt || l.createdAt);
       if (key && byMonth[key]) byMonth[key].won += 1;
     });
@@ -646,12 +715,12 @@ function SalesFunnelTab({ leads, quotations }) {
   }, [leads, range]);
 
   const totalLeads = leads.length;
-  const won = leads.filter((l) => l.status === "Won").length;
+  const won = leads.filter(isLeadWon).length;
   const lost = leads.filter((l) => l.status === "Lost").length;
   const closed = won + lost;
   const conversionRate = closed > 0 ? (won / closed) * 100 : null;
   const pipelineValue = leads
-    .filter((l) => l.status !== "Won" && l.status !== "Lost")
+    .filter((l) => !isLeadClosed(l))
     .reduce((sum, l) => sum + (l.budget || 0), 0);
   const quotedValue = quotations.reduce((sum, q) => sum + (q.total || 0), 0);
 
@@ -660,7 +729,7 @@ function SalesFunnelTab({ leads, quotations }) {
       <StatGrid
         stats={[
           { label: "Total Leads", value: totalLeads },
-          { label: "Won", value: won },
+          { label: "Converted", value: won },
           { label: "Lost", value: lost, negative: lost > 0 },
           { label: "Win Rate", value: conversionRate === null ? "—" : `${conversionRate.toFixed(1)}%` },
           { label: "Open Pipeline Value", value: formatINR(pipelineValue) },
@@ -689,7 +758,7 @@ function SalesFunnelTab({ leads, quotations }) {
               <Tooltip contentStyle={{ fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Line type="monotone" dataKey="newLeads" name="New Leads" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
-              <Line type="monotone" dataKey="won" name="Won" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="won" name="Converted" stroke={LINE_COLORS[2]} strokeWidth={2} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </CardContent>
@@ -806,35 +875,35 @@ function SalesFunnelTab({ leads, quotations }) {
 // Tab 4: Post-Production — new. Task pipeline status, type mix,
 // priority mix, overdue tasks, and a monthly completed-tasks trend.
 // ---------------------------------------------------------------------
+// Deliverables (projects/{id}/deliverables) don't carry a dueDate/priority
+// field the way the old postProdTasks model did — only `deadline`. Mirrors
+// the isOverdue() helper that used to live in postProduction.js.
+function isDeliverableOverdue(d) {
+  if (!d.deadline || d.status === "Done") return false;
+  return d.deadline < new Date().toISOString().split("T")[0];
+}
+
 function PostProductionTab({ tasks, employees }) {
   const [range, setRange] = useState("6");
 
   const statusRows = useMemo(() => {
-    const counts = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0]));
+    const counts = Object.fromEntries(DELIVERABLE_STATUSES.map((s) => [s, 0]));
     tasks.forEach((t) => {
       if (counts[t.status] !== undefined) counts[t.status] += 1;
     });
-    return TASK_STATUSES.map((s) => ({ status: s, count: counts[s] || 0 }));
+    return DELIVERABLE_STATUSES.map((s) => ({ status: s, count: counts[s] || 0 }));
   }, [tasks]);
 
   const typeRows = useMemo(() => {
     const counts = {};
     tasks.forEach((t) => {
-      const key = t.taskType || "Other";
+      const key = t.type || "Other";
       counts[key] = (counts[key] || 0) + 1;
     });
-    return TASK_TYPES.map((ty) => ({ type: ty, count: counts[ty] || 0 })).filter((r) => r.count > 0 || TASK_TYPES.includes(r.type));
+    return DELIVERABLE_TYPES.map((ty) => ({ type: ty, count: counts[ty] || 0 })).filter((r) => r.count > 0 || DELIVERABLE_TYPES.includes(r.type));
   }, [tasks]);
 
-  const priorityRows = useMemo(() => {
-    const counts = Object.fromEntries(TASK_PRIORITIES.map((p) => [p, 0]));
-    tasks.forEach((t) => {
-      if (counts[t.priority] !== undefined) counts[t.priority] += 1;
-    });
-    return TASK_PRIORITIES.map((p) => ({ priority: p, count: counts[p] || 0 }));
-  }, [tasks]);
-
-  const overdueTasks = useMemo(() => tasks.filter((t) => isOverdue(t)), [tasks]);
+  const overdueTasks = useMemo(() => tasks.filter((t) => isDeliverableOverdue(t)), [tasks]);
 
   const byAssignee = useMemo(() => {
     const byPerson = {};
@@ -848,8 +917,8 @@ function PostProductionTab({ tasks, employees }) {
           byPerson[uid] = { uid, name: names[i] || emp?.name || "Unknown", total: 0, completed: 0, overdue: 0 };
         }
         byPerson[uid].total += 1;
-        if (t.status === "Completed") byPerson[uid].completed += 1;
-        if (isOverdue(t)) byPerson[uid].overdue += 1;
+        if (t.status === "Done") byPerson[uid].completed += 1;
+        if (isDeliverableOverdue(t)) byPerson[uid].overdue += 1;
       });
     });
     return Object.values(byPerson).sort((a, b) => b.total - a.total);
@@ -863,7 +932,7 @@ function PostProductionTab({ tasks, employees }) {
       if (createdKey && byMonth[createdKey]) byMonth[createdKey].created += 1;
     });
     tasks.forEach((t) => {
-      if (t.status !== "Completed") return;
+      if (t.status !== "Done") return;
       const key = monthKey(t.updatedAt || t.createdAt);
       if (key && byMonth[key]) byMonth[key].completed += 1;
     });
@@ -871,16 +940,16 @@ function PostProductionTab({ tasks, employees }) {
   }, [tasks, range]);
 
   const total = tasks.length;
-  const completed = tasks.filter((t) => t.status === "Completed").length;
-  const inProgress = tasks.filter((t) => t.status === "In Progress" || t.status === "In Review").length;
+  const completed = tasks.filter((t) => t.status === "Done").length;
+  const inProgress = tasks.filter((t) => t.status === "In Progress").length;
 
   return (
     <div>
       <StatGrid
         stats={[
-          { label: "Total Tasks", value: total },
-          { label: "Completed", value: completed },
-          { label: "In Progress / Review", value: inProgress },
+          { label: "Total Deliverables", value: total },
+          { label: "Done", value: completed },
+          { label: "In Progress", value: inProgress },
           { label: "Overdue", value: overdueTasks.length, negative: overdueTasks.length > 0 },
         ]}
       />
@@ -913,43 +982,22 @@ function PostProductionTab({ tasks, employees }) {
         </CardContent>
       </Card>
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
-        <div>
-          <h3 className="mb-4 text-sm font-medium text-foreground">By pipeline stage</h3>
-          <Card>
-            <CardContent className="pt-4">
-              <ResponsiveContainer width="100%" height={240}>
-                <LineChart data={statusRows} margin={{ left: 8, right: 16, bottom: 40 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="status" tick={{ fontSize: 10 }} angle={-25} textAnchor="end" interval={0} height={55} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
-                  <Tooltip contentStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="count" name="Tasks" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </div>
+      <h3 className="mb-4 text-sm font-medium text-foreground">By pipeline stage</h3>
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={statusRows} margin={{ left: 8, right: 16, bottom: 40 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="status" tick={{ fontSize: 10 }} angle={-25} textAnchor="end" interval={0} height={55} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
+              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="count" name="Deliverables" stroke={LINE_COLORS[0]} strokeWidth={2} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
-        <div>
-          <h3 className="mb-4 text-sm font-medium text-foreground">By priority</h3>
-          <Card>
-            <CardContent className="pt-4">
-              <ResponsiveContainer width="100%" height={240}>
-                <LineChart data={priorityRows} margin={{ left: 8, right: 16, bottom: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="priority" tick={{ fontSize: 11 }} interval={0} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
-                  <Tooltip contentStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="count" name="Tasks" stroke={LINE_COLORS[3]} strokeWidth={2} dot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      <h3 className="mb-4 text-sm font-medium text-foreground">By task type</h3>
+      <h3 className="mb-4 text-sm font-medium text-foreground">By deliverable type</h3>
       <Card className="mb-6">
         <CardContent className="pt-4">
           <ResponsiveContainer width="100%" height={260}>
@@ -958,7 +1006,7 @@ function PostProductionTab({ tasks, employees }) {
               <XAxis dataKey="type" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0} height={80} />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={30} />
               <Tooltip contentStyle={{ fontSize: 12 }} />
-              <Line type="monotone" dataKey="count" name="Tasks" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="count" name="Deliverables" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
         </CardContent>
@@ -966,7 +1014,7 @@ function PostProductionTab({ tasks, employees }) {
 
       <h3 className="mb-4 text-sm font-medium text-foreground">By assignee</h3>
       {byAssignee.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
+        <p className="text-sm text-muted-foreground">No deliverables assigned yet.</p>
       ) : (
         <Card>
           <Table>
@@ -1001,29 +1049,19 @@ function PostProductionTab({ tasks, employees }) {
 // auto-created so admin controls exactly when a payout is recorded),
 // manual costs, and advances/reimbursements to anyone on the team.
 // ---------------------------------------------------------------------
-function ExpensesTab({ expenses, projects, employees, freelancers, events, user, onChanged }) {
+function ExpensesTab({ expenses, projects, employees, freelancers, events, user, onChanged, expenseCategories = MANUAL_EXPENSE_CATEGORIES }) {
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({
     projectId: "",
-    type: "manual",
     category: "Misc",
     amount: "",
     description: "",
-    personUid: "",
     date: new Date().toISOString().slice(0, 10),
   });
   const [saving, setSaving] = useState(false);
   const [filterProject, setFilterProject] = useState("all");
   const [filterType, setFilterType] = useState("all");
   const [search, setSearch] = useState("");
-
-  const allPeople = useMemo(
-    () => [
-      ...employees.map((e) => ({ uid: e.uid, name: e.name, type: "employee" })),
-      ...freelancers.map((f) => ({ uid: f.id, name: f.name, type: "freelancer" })),
-    ],
-    [employees, freelancers]
-  );
 
   // Suggested freelancer payouts still outstanding: for every freelancer
   // team-member on an event, dayRate × shootDays, summed per (project,
@@ -1122,25 +1160,17 @@ function ExpensesTab({ expenses, projects, employees, freelancers, events, user,
       toast.error("Project and amount are required");
       return;
     }
-    if (form.type === "advance" && !form.personUid) {
-      toast.error("Select who the advance is for");
-      return;
-    }
     setSaving(true);
     try {
       const project = projects.find((p) => p.id === form.projectId);
-      const person = allPeople.find((p) => p.uid === form.personUid);
       await createExpense(
         {
           projectId: form.projectId,
           projectName: project?.projectName || "",
-          type: form.type,
-          category: form.type === "manual" ? form.category : form.type === "advance" ? "Advance" : "",
+          type: "manual",
+          category: form.category,
           amount: form.amount,
           description: form.description,
-          personUid: person?.uid || null,
-          personName: person?.name || null,
-          personType: person?.type || null,
           date: form.date,
         },
         user.uid,
@@ -1149,11 +1179,9 @@ function ExpensesTab({ expenses, projects, employees, freelancers, events, user,
       toast.success("Expense logged");
       setForm({
         projectId: "",
-        type: "manual",
         category: "Misc",
         amount: "",
         description: "",
-        personUid: "",
         date: new Date().toISOString().slice(0, 10),
       });
       setFormOpen(false);
@@ -1298,52 +1326,16 @@ function ExpensesTab({ expenses, projects, employees, freelancers, events, user,
                 </Select>
               </div>
               <div>
-                <Label>Type</Label>
-                <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v }))}>
-                  <SelectTrigger>
-                    <SelectValue>
-                      {(v) => (v === "manual" ? "Manual Expense" : "Advance/Reimbursement")}
-                    </SelectValue>
-                  </SelectTrigger>
+                <Label>Category</Label>
+                <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="manual">Manual Expense</SelectItem>
-                    <SelectItem value="advance">Advance/Reimbursement</SelectItem>
+                    {expenseCategories.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-              {form.type === "manual" && (
-                <div>
-                  <Label>Category</Label>
-                  <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {MANUAL_EXPENSE_CATEGORIES.map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              {form.type === "advance" && (
-                <div>
-                  <Label>Paid to</Label>
-                  <Select value={form.personUid} onValueChange={(v) => setForm((f) => ({ ...f, personUid: v }))}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select person">
-                        {(v) => {
-                          const p = allPeople.find((pp) => pp.uid === v);
-                          return p ? `${p.name} (${p.type})` : "Select person";
-                        }}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allPeople.map((p) => (
-                        <SelectItem key={p.uid} value={p.uid}>{p.name} ({p.type})</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
               <div>
                 <Label>Amount (₹)</Label>
                 <Input
@@ -1460,6 +1452,20 @@ function PnlTab({ projects, quotations, invoices, expenses, events }) {
   const [range, setRange] = useState("6"); // months back: "6" | "12"
   const [expandedId, setExpandedId] = useState(null);
   const costByProject = useMemo(() => sumExpensesByProject(expenses), [expenses]);
+  // In-house team cost (each event team member's per-assignment `cost`
+  // field) — kept separate from logged `expenses` docs, same split the
+  // project detail page uses (its `teamCost` vs `otherExpensesTotal`).
+  // Omitting this here was the source of the Projects vs. Analytics
+  // mismatch: this tab used to treat logged expenses as the *entire*
+  // project cost, so P&L numbers ran lower than the per-project page,
+  // which always adds team cost on top.
+  const teamCostByProject = useMemo(() => {
+    const byProject = {};
+    events.forEach((ev) => {
+      byProject[ev.projectId] = (byProject[ev.projectId] || 0) + sumEventTeamCost(ev.team);
+    });
+    return byProject;
+  }, [events]);
   const receivedByProject = useMemo(() => {
     const byProject = {};
     invoices.forEach((inv) => {
@@ -1479,10 +1485,12 @@ function PnlTab({ projects, quotations, invoices, expenses, events }) {
   const rows = useMemo(() => {
     return projects.map((p) => {
       const quote = quotations.find((q) => q.id === p.quotationId);
-      const revenue = quote?.total ?? p.quotationAmount ?? 0;
+      const revenue = p.quotationAmount ?? quote?.total ?? 0;
       const collected = receivedByProject[p.id] || 0;
       const outstanding = Math.max(0, revenue - collected);
-      const cost = costByProject[p.id] || 0;
+      const loggedCost = costByProject[p.id] || 0;
+      const teamCost = teamCostByProject[p.id] || 0;
+      const cost = loggedCost + teamCost;
       const profit = revenue - cost;
       const margin = revenue > 0 ? (profit / revenue) * 100 : null;
       return {
@@ -1491,13 +1499,15 @@ function PnlTab({ projects, quotations, invoices, expenses, events }) {
         revenue,
         collected,
         outstanding,
+        loggedCost,
+        teamCost,
         cost,
         profit,
         margin,
         eventCount: eventCountByProject[p.id] || 0,
       };
     }).sort((a, b) => b.profit - a.profit);
-  }, [projects, quotations, costByProject, receivedByProject, eventCountByProject]);
+  }, [projects, quotations, costByProject, teamCostByProject, receivedByProject, eventCountByProject]);
 
   const totals = rows.reduce(
     (acc, r) => ({
@@ -1512,9 +1522,12 @@ function PnlTab({ projects, quotations, invoices, expenses, events }) {
 
   // Monthly trend: revenue is attributed to the month a project was
   // created (that's when its quotation was won, so it's the closest
-  // thing to a "revenue booked" date we track), cost to the month each
-  // expense was actually dated. Both roll up independently by month, then
-  // profit is derived per month from the two totals.
+  // thing to a "revenue booked" date we track). Cost combines logged
+  // expenses (dated to when each was actually incurred) with in-house
+  // team cost, attributed to the month of the shoot (eventStartDate) it
+  // came from — mirrors the same split used per-project above. Both
+  // roll up independently by month, then profit is derived per month
+  // from the two totals.
   const monthlyData = useMemo(() => {
     const months = lastNMonthKeys(Number(range));
     const byMonth = Object.fromEntries(months.map((k) => [k, { revenue: 0, cost: 0 }]));
@@ -1523,7 +1536,7 @@ function PnlTab({ projects, quotations, invoices, expenses, events }) {
       const key = monthKey(p.createdAt);
       if (key && byMonth[key]) {
         const quote = quotations.find((q) => q.id === p.quotationId);
-        byMonth[key].revenue += quote?.total ?? p.quotationAmount ?? 0;
+        byMonth[key].revenue += p.quotationAmount ?? quote?.total ?? 0;
       }
     });
 
@@ -1534,13 +1547,20 @@ function PnlTab({ projects, quotations, invoices, expenses, events }) {
       }
     });
 
+    events.forEach((ev) => {
+      const key = monthKey(ev.eventStartDate);
+      if (key && byMonth[key]) {
+        byMonth[key].cost += sumEventTeamCost(ev.team);
+      }
+    });
+
     return months.map((key) => ({
       month: monthLabel(key),
       revenue: byMonth[key].revenue,
       cost: byMonth[key].cost,
       profit: byMonth[key].revenue - byMonth[key].cost,
     }));
-  }, [projects, quotations, expenses, range]);
+  }, [projects, quotations, expenses, events, range]);
 
   return (
     <div>
@@ -1675,14 +1695,18 @@ function ProjectBreakdown({ project, expenses }) {
     [expenses, project.id]
   );
 
+  // In-house team cost gets its own line (matching the "Team Cost" figure
+  // on the project detail page) so this breakdown adds up to the same
+  // total `cost` shown in the P&L row, not just the logged-expenses slice.
   const byCategory = useMemo(() => {
     const map = {};
+    if (project.teamCost > 0) map["In-House Team Cost"] = project.teamCost;
     projectExpenses.forEach((e) => {
       const label = e.type === "freelancer_payout" ? "Freelancer Payouts" : e.type === "advance" ? "Advances" : e.category || "Misc";
       map[label] = (map[label] || 0) + (e.amount || 0);
     });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [projectExpenses]);
+  }, [projectExpenses, project.teamCost]);
 
   return (
     <div className="flex flex-col gap-3 p-4">

@@ -31,10 +31,38 @@ export async function hasOverlappingLeave(uid, startDate, endDate) {
   });
 }
 
+/**
+ * Checks whether the employee already has attendance marked (checked in,
+ * not just auto-marked leave) for any day in [startDate, endDate]. Scoped
+ * to the employee's own uid so it satisfies the same
+ * "employeeUid == request.auth.uid" list rule the rest of the self-service
+ * attendance queries rely on.
+ */
+async function hasAttendanceMarkedInRange(uid, startDate, endDate) {
+  const q = query(
+    collection(db, "attendance"),
+    where("employeeUid", "==", uid),
+    where("date", ">=", startDate),
+    where("date", "<=", endDate)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.some((d) => {
+    const status = d.data().status;
+    return status === "present" || status === "late";
+  });
+}
+
 export async function applyLeave({ employeeUid, employeeName, department, leaveType, startDate, endDate, reason }) {
   const overlapping = await hasOverlappingLeave(employeeUid, startDate, endDate);
   if (overlapping) {
     throw new Error("You already have a leave request for one or more of these dates.");
+  }
+
+  const alreadyAttended = await hasAttendanceMarkedInRange(employeeUid, startDate, endDate);
+  if (alreadyAttended) {
+    throw new Error(
+      "You've already marked attendance on one or more of these dates. Leave can't be applied for a day you've attended."
+    );
   }
 
   const now = new Date().toISOString();

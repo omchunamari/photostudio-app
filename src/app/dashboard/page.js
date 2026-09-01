@@ -27,6 +27,7 @@ import { getPendingLeaveRequests } from "@/lib/firebase/leave";
 import { getAllDevices } from "@/lib/firebase/devices";
 import { getAnnouncement, setAnnouncement, clearAnnouncement } from "@/lib/firebase/announcements";
 import { getEventsForEmployee } from "@/lib/firebase/events";
+import { getDeliverablesForEmployee } from "@/lib/firebase/deliverables";
 import { isEventPast } from "@/lib/status";
 import { FINANCE_ROLES, fyStartYearForDate, fyLabel, loadFinanceOverview } from "@/lib/dashboardFinance";
 import { toast } from "sonner";
@@ -38,6 +39,7 @@ import {
   FolderKanban,
   Megaphone,
   Pencil,
+  ClipboardList,
 } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin"];
@@ -101,6 +103,7 @@ function DashboardContent() {
   });
 
   const [myProjects, setMyProjects] = useState([]); // [{ projectId, projectName, eventCount, latestNote: { text, addedAt } | null }]
+  const [myDeliverables, setMyDeliverables] = useState([]);
 
   const [announcement, setAnnouncementState] = useState(null);
   const [editingAnnouncement, setEditingAnnouncement] = useState(false);
@@ -163,6 +166,7 @@ function DashboardContent() {
       loadAdminStats();
     } else {
       loadMyProjects();
+      loadMyDeliverables();
     }
   }, [isAdminView]);
 
@@ -217,6 +221,22 @@ function DashboardContent() {
     });
 
     setMyProjects(Object.values(byProject).sort((a, b) => b.eventCount - a.eventCount));
+  }
+
+  /**
+   * Pulls the employee's assigned post-production deliverables for the
+   * dashboard summary card — same collectionGroup query the
+   * Post-Production page itself uses (see getDeliverablesForEmployee in
+   * deliverables.js), just capped/sorted for a glanceable widget here
+   * rather than the full management view.
+   */
+  async function loadMyDeliverables() {
+    try {
+      const deliverables = await getDeliverablesForEmployee(user.uid);
+      setMyDeliverables(deliverables.filter((d) => d.status !== "Done"));
+    } catch (err) {
+      console.error("Failed to load your deliverables:", err);
+    }
   }
 
   return (
@@ -330,6 +350,8 @@ function DashboardContent() {
               )}
 
               {!isAdminView && <MyProjectsPanel projects={myProjects} />}
+
+              {!isAdminView && <MyPostProductionPanel deliverables={myDeliverables} />}
             </div>
           </TabsContent>
 
@@ -391,6 +413,74 @@ function MyProjectsPanel({ projects }) {
       )}
     </div>
   );
+}
+
+const DELIVERABLE_STATUS_DOT = {
+  Pending: "bg-amber-500",
+  "In Progress": "bg-sky-500",
+  Done: "bg-emerald-500",
+};
+
+function MyPostProductionPanel({ deliverables }) {
+  const VISIBLE_CAP = 3;
+  // Deadline-soonest first, undated ones last — this is a "what needs my
+  // attention" widget, so the most urgent item should be on top.
+  const sorted = [...deliverables].sort((a, b) => {
+    if (!a.deadline && !b.deadline) return 0;
+    if (!a.deadline) return 1;
+    if (!b.deadline) return -1;
+    return new Date(a.deadline) - new Date(b.deadline);
+  });
+  const visible = sorted.slice(0, VISIBLE_CAP);
+  const extra = sorted.length - visible.length;
+
+  return (
+    <div>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <ClipboardList className="h-3.5 w-3.5" /> My Post-Production Tasks
+      </p>
+      {deliverables.length === 0 ? (
+        <Card>
+          <CardContent className="p-3 text-sm text-slate-500 sm:p-4">
+            You&apos;re not assigned to any open deliverables right now.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {visible.map((d) => (
+            <Link key={d.id} href="/post-production">
+              <Card className="transition hover:border-slate-300 hover:shadow-sm">
+                <CardContent className="flex items-start justify-between gap-3 p-3 sm:p-4">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${DELIVERABLE_STATUS_DOT[d.status] || "bg-slate-400"}`} />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-900">{d.type}</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">{d.projectName}{d.clientName ? ` · ${d.clientName}` : ""}</p>
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-xs text-slate-500">
+                    {d.deadline ? `Due ${fmtShortDate(d.deadline)}` : d.status}
+                  </span>
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+          {extra > 0 && (
+            <Link
+              href="/post-production"
+              className="text-center text-xs font-medium text-accent hover:underline"
+            >
+              +{extra} more task{extra !== 1 && "s"} — view all
+            </Link>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtShortDate(d) {
+  return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
 const ACCENTS = {

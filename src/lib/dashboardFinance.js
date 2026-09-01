@@ -28,7 +28,7 @@ function fyRange(startYear) {
   };
 }
 
-function inFY(dateStr, startYear) {
+export function inFY(dateStr, startYear) {
   if (!dateStr) return false;
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return false;
@@ -88,9 +88,12 @@ export async function loadFinanceOverview(startYear) {
   const fyProjectIds = new Set(fyProjects.map((p) => p.id));
 
   // Total Revenue — projects *booked* (created) within the selected FY.
+  // quotationAmount is seeded from the linked quote at project creation but
+  // stays independently editable afterwards (e.g. extra requirements added
+  // post-quote) — prefer it over the quote's original total so edits stick.
   const totalRevenue = fyProjects.reduce((sum, p) => {
     const quote = p.quotationId ? quotesById[p.quotationId] : null;
-    return sum + (quote?.total ?? p.quotationAmount ?? 0);
+    return sum + (p.quotationAmount ?? quote?.total ?? 0);
   }, 0);
 
   // Received on Bookings — paid invoices (see the "Mark Paid" toggle on

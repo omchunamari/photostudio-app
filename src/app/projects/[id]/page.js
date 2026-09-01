@@ -6,6 +6,7 @@ import Link from "next/link";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
+import AssignTeamDialog from "@/components/AssignTeamDialog";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   getProjectById,
@@ -14,7 +15,7 @@ import {
   deleteProject,
   setProjectLeader,
 } from "@/lib/firebase/projects";
-import { createEvent, getEventsForProject, sumEventTeamCost } from "@/lib/firebase/events";
+import { createEvent, getEventsForProject, sumEventTeamCost, updateEventTeam } from "@/lib/firebase/events";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import {
   getInvoicesForProject,
@@ -30,6 +31,9 @@ import {
   createExpense,
   deleteExpense,
   MANUAL_EXPENSE_CATEGORIES,
+  getAllExpenseCategories,
+  addCustomExpenseCategory,
+  removeCustomExpenseCategory,
 } from "@/lib/firebase/expenses";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
 import { isEventPast } from "@/lib/status";
@@ -65,12 +69,36 @@ import {
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash2, Crown } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Crown, X } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 function inr(n) {
   return `₹${(Number(n) || 0).toLocaleString("en-IN")}`;
+}
+
+// Stable, deterministic color per category so the same label always gets
+// the same pill color across sessions — including custom categories added
+// later, which fall through to the hash-based palette.
+const CATEGORY_COLORS = {
+  Travel: "bg-blue-50 text-blue-700",
+  Equipment: "bg-violet-50 text-violet-700",
+  Accommodation: "bg-amber-50 text-amber-700",
+  Food: "bg-emerald-50 text-emerald-700",
+  Miscellaneous: "bg-slate-100 text-slate-700",
+};
+const FALLBACK_CATEGORY_PALETTE = [
+  "bg-rose-50 text-rose-700",
+  "bg-cyan-50 text-cyan-700",
+  "bg-fuchsia-50 text-fuchsia-700",
+  "bg-lime-50 text-lime-700",
+  "bg-orange-50 text-orange-700",
+];
+function categoryColor(category) {
+  if (CATEGORY_COLORS[category]) return CATEGORY_COLORS[category];
+  let hash = 0;
+  for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
+  return FALLBACK_CATEGORY_PALETTE[hash % FALLBACK_CATEGORY_PALETTE.length];
 }
 
 function ProjectDetailContent() {
@@ -90,6 +118,13 @@ function ProjectDetailContent() {
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [savingLeader, setSavingLeader] = useState(false);
+  const [assignDialogEvent, setAssignDialogEvent] = useState(null); // event object | null
+  const [editingCost, setEditingCost] = useState(null); // { eventId, uid } | null
+  const [editingCostValue, setEditingCostValue] = useState("");
+  const [savingCost, setSavingCost] = useState(false);
+  const [editingPackage, setEditingPackage] = useState(false);
+  const [editingPackageValue, setEditingPackageValue] = useState("");
+  const [savingPackage, setSavingPackage] = useState(false);
 
   const [detailsForm, setDetailsForm] = useState({
     projectName: "",
@@ -116,6 +151,11 @@ function ProjectDetailContent() {
   // --- Other Expenses ---
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [savingExpense, setSavingExpense] = useState(false);
+  const [expenseCategories, setExpenseCategories] = useState(MANUAL_EXPENSE_CATEGORIES);
+  const [manageCategoriesOpen, setManageCategoriesOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [savingCategory, setSavingCategory] = useState(false);
+  const [removingCategory, setRemovingCategory] = useState(null);
   const [expenseForm, setExpenseForm] = useState({
     category: MANUAL_EXPENSE_CATEGORIES[0],
     amount: "",
@@ -149,12 +189,14 @@ function ProjectDetailContent() {
           toast.error(`Failed loading employees: ${err.message}`);
         }
         try {
-          const [invs, exps] = await Promise.all([
+          const [invs, exps, cats] = await Promise.all([
             getInvoicesForProject(id),
             getExpensesForProject(id),
+            getAllExpenseCategories(),
           ]);
           setInvoices(invs);
           setExpenses(exps);
+          setExpenseCategories(cats);
         } catch (err) {
           toast.error(`Failed loading financials: ${err.message}`);
         }
@@ -203,6 +245,49 @@ function ProjectDetailContent() {
       toast.success("Status updated");
     } catch (err) {
       toast.error(err.message);
+    }
+  }
+
+  async function handleUpdatePackageAmount(newAmount) {
+    const amount = Number(newAmount);
+    if (Number.isNaN(amount) || amount < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingPackage(true);
+    try {
+      await updateProjectDetails(id, { quotationAmount: amount });
+      setProject((prev) => ({ ...prev, quotationAmount: amount }));
+      toast.success("Package amount updated");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingPackage(false);
+    }
+  }
+
+  async function handleUpdateMemberCost(eventId, uid, newCost) {
+    const cost = Number(newCost);
+    if (Number.isNaN(cost) || cost < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    const ev = events.find((e) => e.id === eventId);
+    if (!ev) return;
+    setSavingCost(true);
+    try {
+      const newTeam = (ev.team || []).map((m) =>
+        m.uid === uid ? { ...m, cost } : m
+      );
+      await updateEventTeam(id, eventId, newTeam, ev.status);
+      setEvents((prev) =>
+        prev.map((e) => (e.id === eventId ? { ...e, team: newTeam } : e))
+      );
+      toast.success("Amount updated");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingCost(false);
     }
   }
 
@@ -373,6 +458,38 @@ function ProjectDetailContent() {
     }
   }
 
+  async function handleAddCategory(e) {
+    e.preventDefault();
+    if (!newCategoryName.trim()) return;
+    setSavingCategory(true);
+    try {
+      const next = await addCustomExpenseCategory(newCategoryName);
+      setExpenseCategories([...MANUAL_EXPENSE_CATEGORIES, ...next]);
+      setNewCategoryName("");
+      toast.success("Category added");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingCategory(false);
+    }
+  }
+
+  async function handleRemoveCategory(name) {
+    setRemovingCategory(name);
+    try {
+      const next = await removeCustomExpenseCategory(name);
+      setExpenseCategories([...MANUAL_EXPENSE_CATEGORIES, ...next]);
+      // If the expense form currently has this category selected, fall
+      // back to the first default so it never points at a removed value.
+      setExpenseForm((p) => (p.category === name ? { ...p, category: MANUAL_EXPENSE_CATEGORIES[0] } : p));
+      toast.success("Category removed");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setRemovingCategory(null);
+    }
+  }
+
   if (loading) {
     return (
       <AppShell>
@@ -406,12 +523,14 @@ function ProjectDetailContent() {
     <AppShell>
       <button
         onClick={() => router.push("/projects")}
-        className="mb-3 flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
+        className="mb-3 -ml-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-sm text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
       >
         <ArrowLeft className="h-4 w-4" /> Back to Projects
       </button>
 
-      <div className="sticky top-0 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white py-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* top-14 clears AppShell's fixed mobile top bar (h-14); on md+ that
+          bar doesn't exist so the header can stick flush to top-0. */}
+      <div className="sticky top-14 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white py-3 sm:flex-row sm:items-center sm:justify-between md:top-0">
         <div className="min-w-0">
           <h2 className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">
             {project.projectName}
@@ -433,8 +552,10 @@ function ProjectDetailContent() {
           </Select>
 
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger className="inline-flex items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800">
-              <Plus className="h-4 w-4" /> Add Event
+            <DialogTrigger asChild>
+              <Button size="sm">
+                <Plus className="h-4 w-4" /> Add Event
+              </Button>
             </DialogTrigger>
             <DialogContent className="w-[95vw] max-w-md">
               <DialogHeader>
@@ -525,7 +646,49 @@ function ProjectDetailContent() {
           <Card>
             <CardContent className="p-4">
               <p className="text-xs text-slate-500">Package</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{inr(packageAmount)}</p>
+              {editingPackage ? (
+                <p className="mt-1 flex items-center gap-1 text-lg font-semibold text-slate-900">
+                  ₹
+                  <input
+                    autoFocus
+                    type="number"
+                    min="0"
+                    value={editingPackageValue}
+                    onChange={(e) => setEditingPackageValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.currentTarget.blur();
+                      } else if (e.key === "Escape") {
+                        setEditingPackage(false);
+                      }
+                    }}
+                    onBlur={() => {
+                      setEditingPackage(false);
+                      if (editingPackageValue !== String(project.quotationAmount || 0)) {
+                        handleUpdatePackageAmount(editingPackageValue);
+                      }
+                    }}
+                    disabled={savingPackage}
+                    className="w-24 border-b border-slate-300 bg-transparent text-lg font-semibold text-slate-900 outline-none focus:border-slate-900"
+                  />
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!isAdminOrPM}
+                  onClick={() => {
+                    if (!isAdminOrPM) return;
+                    setEditingPackageValue(String(project.quotationAmount || 0));
+                    setEditingPackage(true);
+                  }}
+                  title={isAdminOrPM ? "Click to edit package amount" : undefined}
+                  className={`mt-1 block text-left text-lg font-semibold text-slate-900 ${
+                    isAdminOrPM ? "rounded hover:bg-slate-50" : ""
+                  }`}
+                >
+                  {inr(packageAmount)}
+                </button>
+              )}
               <p className="text-[11px] text-slate-400">100% (base)</p>
             </CardContent>
           </Card>
@@ -567,81 +730,78 @@ function ProjectDetailContent() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
+      <div className="flex flex-col gap-6">
+        {/* --- Project Details --- compact single row, not a tall sidebar
+            column, so it doesn't dominate the page next to Invoices/Events
+            below it. */}
         <Card>
-          <CardContent className="p-4 sm:p-5">
-            <h3 className="mb-3 font-medium text-slate-900">Project Details</h3>
-            <form onSubmit={handleSaveDetails} className="flex flex-col gap-3">
-              <div>
-                <Label htmlFor="projectName">Project Name</Label>
+          <CardContent className="flex flex-wrap items-end gap-x-6 gap-y-4 p-4">
+            <form onSubmit={handleSaveDetails} className="flex w-full items-end gap-2 sm:w-auto sm:min-w-[220px] sm:flex-1">
+              <div className="flex-1">
+                <Label htmlFor="projectName" className="text-xs text-slate-500">Project Name</Label>
                 <Input
                   id="projectName"
+                  className="h-8"
                   value={detailsForm.projectName}
                   onChange={(e) => setDetailsForm({ projectName: e.target.value })}
                   required
                 />
               </div>
-              {project.deliverables && (
-                <div>
-                  <p className="text-xs text-slate-500">Deliverables</p>
-                  <p className="text-sm text-slate-900">{project.deliverables}</p>
-                </div>
-              )}
-              <Button type="submit" disabled={savingDetails} className="w-full">
-                {savingDetails ? "Saving..." : "Save Details"}
+              <Button type="submit" size="sm" disabled={savingDetails}>
+                {savingDetails ? "Saving..." : "Save"}
               </Button>
             </form>
 
-            <div className="mt-4 border-t border-slate-200 pt-4">
-              <Label className="mb-1.5 flex items-center gap-1.5">
+            <div className="w-full sm:w-auto sm:min-w-[220px]">
+              <Label className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
                 <Crown className="h-3.5 w-3.5 text-amber-500" /> Project Leader
               </Label>
               {isAdminOrPM ? (
-                <>
-                  <Select
-                    value={project.leaderUid || "none"}
-                    onValueChange={handleSetLeader}
-                    disabled={savingLeader}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="No leader assigned">
-                        {(v) =>
-                          v === "none" || !v
-                            ? "No leader"
-                            : (() => {
-                                const emp = employees.find((e) => e.uid === v);
-                                return emp ? `${emp.name} (${emp.role})` : project.leaderName || v;
-                              })()
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">No leader</SelectItem>
-                      {employees.map((e) => (
-                        <SelectItem key={e.uid} value={e.uid}>
-                          {e.name} ({e.role})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-1.5 text-xs text-slate-500">
-                    The leader can manage only this project — assign its team (employees +
-                    freelancers) and update event status — but can't see other projects.
-                  </p>
-                </>
+                <Select
+                  value={project.leaderUid || "none"}
+                  onValueChange={handleSetLeader}
+                  disabled={savingLeader}
+                >
+                  <SelectTrigger className="h-8 w-full">
+                    <SelectValue placeholder="No leader assigned">
+                      {(v) =>
+                        v === "none" || !v
+                          ? "No leader"
+                          : (() => {
+                              const emp = employees.find((e) => e.uid === v);
+                              return emp ? `${emp.name} (${emp.role})` : project.leaderName || v;
+                            })()
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No leader</SelectItem>
+                    {employees.map((e) => (
+                      <SelectItem key={e.uid} value={e.uid}>
+                        {e.name} ({e.role})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               ) : (
                 <p className="text-sm text-slate-900">{project.leaderName || "Unassigned"}</p>
               )}
             </div>
+
+            {project.deliverables && (
+              <div className="w-full sm:w-auto sm:min-w-[160px]">
+                <p className="text-xs text-slate-500">Deliverables</p>
+                <p className="text-sm text-slate-900">{project.deliverables}</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <div className="flex flex-col gap-6">
-          {/* --- Invoices --- */}
+        {/* --- Invoices --- */}
           {isAdminOrPM && (
             <Card>
               <CardContent className="p-4 sm:p-5">
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <h3 className="font-medium text-slate-900">Invoices</h3>
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
@@ -737,7 +897,7 @@ function ProjectDetailContent() {
                     {invoices.map((inv) => (
                       <div
                         key={inv.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 p-3"
+                        className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-slate-200 p-3"
                       >
                         <div className="min-w-0">
                           <p className="font-medium text-slate-900">
@@ -745,7 +905,7 @@ function ProjectDetailContent() {
                           </p>
                           <p className="text-sm text-slate-500">{inr(inv.amount)}</p>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2">
                           <button
                             onClick={() => handleToggleInvoiceStatus(inv)}
                             className={`rounded-full px-2.5 py-1 text-xs font-medium ${
@@ -770,9 +930,7 @@ function ProjectDetailContent() {
 
           {/* --- Events --- */}
           <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-base font-medium text-slate-900 sm:text-lg">Events</h3>
-            </div>
+            <h3 className="mb-2 text-base font-medium text-slate-900 sm:text-lg">Events</h3>
             {events.length === 0 ? (
               <p className="text-sm text-slate-500">No events yet. Add one to start assigning a team.</p>
             ) : (
@@ -797,14 +955,14 @@ function ProjectDetailContent() {
                         />
                         <Card className="transition hover:border-slate-300">
                           <CardContent className="p-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <Link href={`/projects/${id}/events/${ev.id}`} className="min-w-0 flex-1">
-                                <p className="truncate font-medium text-slate-900">
-                                  {ev.eventName}
-                                  <span className="ml-2 inline-flex rounded-full bg-slate-100 px-2 py-0.5 align-middle text-[10px] font-medium text-slate-500">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                              <Link href={`/projects/${id}/events/${ev.id}`} className="min-w-0 flex-1 sm:pt-0.5">
+                                <div className="flex items-center gap-2">
+                                  <p className="truncate font-medium text-slate-900">{ev.eventName}</p>
+                                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
                                     {assignedCount > 0 ? "Assigned" : "Not Assigned"}
                                   </span>
-                                </p>
+                                </div>
                                 <p className="truncate text-xs text-slate-500">
                                   {ev.eventStartDate
                                     ? ev.eventStartDate === ev.eventEndDate
@@ -814,14 +972,31 @@ function ProjectDetailContent() {
                                   · {ev.shootDays || 1} day{ev.shootDays !== 1 && "s"} · {assignedCount} assigned
                                 </p>
                               </Link>
-                              <div className="flex shrink-0 items-center gap-2">
+                              {/*
+                                Alignment fix: cost / status / Assign button used
+                                to sit in a plain flex row, so a longer status
+                                label (e.g. "In Progress" vs "Done") shifted the
+                                Assign button left/right on different cards.
+                                Giving the status a fixed-width centered slot
+                                (and matching width on the button) keeps every
+                                Assign button in the same horizontal position
+                                regardless of status text length.
+                              */}
+                              <div className="flex shrink-0 flex-wrap items-center gap-2 sm:flex-nowrap">
                                 {isAdminOrPM && evCost > 0 && (
                                   <span className="text-sm font-medium text-amber-600">{inr(evCost)}</span>
                                 )}
-                                <Link href={`/projects/${id}/events/${ev.id}`}>
-                                  <Button size="sm" variant="secondary">Assign →</Button>
-                                </Link>
-                                <StatusBadge status={ev.status} />
+                                <span className="flex w-[104px] shrink-0 justify-center">
+                                  <StatusBadge status={ev.status} />
+                                </span>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="w-[92px] shrink-0"
+                                  onClick={() => setAssignDialogEvent(ev)}
+                                >
+                                  Assign →
+                                </Button>
                               </div>
                             </div>
                             {assignedCount > 0 && (
@@ -832,9 +1007,50 @@ function ProjectDetailContent() {
                                     className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
                                   >
                                     {m.name}
-                                    {m.cost > 0 && (
-                                      <span className="text-slate-400">
-                                        {m.costLabel || "Full Day"} {inr(m.cost)}
+                                    {editingCost?.eventId === ev.id && editingCost?.uid === m.uid ? (
+                                      <span className="inline-flex items-center gap-0.5 text-slate-500">
+                                        {m.costLabel || "Full Day"}{" "}
+                                        <input
+                                          autoFocus
+                                          type="number"
+                                          min="0"
+                                          value={editingCostValue}
+                                          onClick={(e) => e.preventDefault()}
+                                          onChange={(e) => setEditingCostValue(e.target.value)}
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                              e.currentTarget.blur();
+                                            } else if (e.key === "Escape") {
+                                              setEditingCost(null);
+                                            }
+                                          }}
+                                          onBlur={() => {
+                                            setEditingCost(null);
+                                            if (editingCostValue !== String(m.cost || 0)) {
+                                              handleUpdateMemberCost(ev.id, m.uid, editingCostValue);
+                                            }
+                                          }}
+                                          disabled={savingCost}
+                                          className="w-16 border-b border-slate-400 bg-transparent text-[11px] text-slate-700 outline-none"
+                                        />
+                                      </span>
+                                    ) : (m.cost > 0 || isAdminOrPM) && (
+                                      <span
+                                        role={isAdminOrPM ? "button" : undefined}
+                                        tabIndex={isAdminOrPM ? 0 : undefined}
+                                        onClick={(e) => {
+                                          if (!isAdminOrPM) return;
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setEditingCostValue(String(m.cost || 0));
+                                          setEditingCost({ eventId: ev.id, uid: m.uid });
+                                        }}
+                                        className={`text-slate-400 ${
+                                          isAdminOrPM ? "cursor-pointer underline decoration-dotted hover:text-slate-700" : ""
+                                        }`}
+                                        title={isAdminOrPM ? "Click to edit amount" : undefined}
+                                      >
+                                        {m.costLabel || "Full Day"} {inr(m.cost || 0)}
                                       </span>
                                     )}
                                   </span>
@@ -854,8 +1070,71 @@ function ProjectDetailContent() {
           {isAdminOrPM && (
             <Card>
               <CardContent className="p-4 sm:p-5">
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-medium text-slate-900">Other Expenses</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Dialog open={manageCategoriesOpen} onOpenChange={setManageCategoriesOpen}>
+                      <DialogTrigger asChild>
+                        <Button size="sm" variant="outline">Manage Categories</Button>
+                      </DialogTrigger>
+                      <DialogContent className="w-[95vw] max-w-sm">
+                        <DialogHeader>
+                          <DialogTitle>Manage Expense Categories</DialogTitle>
+                        </DialogHeader>
+                        <form onSubmit={handleAddCategory} className="flex items-center gap-2">
+                          <Input
+                            placeholder="New category name..."
+                            value={newCategoryName}
+                            onChange={(e) => setNewCategoryName(e.target.value)}
+                          />
+                          <Button type="submit" size="sm" disabled={savingCategory || !newCategoryName.trim()}>
+                            {savingCategory ? "Adding..." : "Add"}
+                          </Button>
+                        </form>
+                        <div>
+                          <p className="mb-2 text-xs font-medium text-slate-500">Default (cannot remove)</p>
+                          <div className="flex flex-wrap gap-2">
+                            {MANUAL_EXPENSE_CATEGORIES.map((c) => (
+                              <span
+                                key={c}
+                                className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryColor(c)}`}
+                              >
+                                {c}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        {expenseCategories.length > MANUAL_EXPENSE_CATEGORIES.length && (
+                          <div>
+                            <p className="mb-2 text-xs font-medium text-slate-500">Custom</p>
+                            <div className="flex flex-wrap gap-2">
+                              {expenseCategories
+                                .filter((c) => !MANUAL_EXPENSE_CATEGORIES.includes(c))
+                                .map((c) => (
+                                  <span
+                                    key={c}
+                                    className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium ${categoryColor(c)}`}
+                                  >
+                                    {c}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveCategory(c)}
+                                      disabled={removingCategory === c}
+                                      className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
+                                      title={`Remove ${c}`}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </span>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                        <Button type="button" variant="outline" onClick={() => setManageCategoriesOpen(false)}>
+                          Done
+                        </Button>
+                      </DialogContent>
+                    </Dialog>
                   <Dialog open={expenseDialogOpen} onOpenChange={setExpenseDialogOpen}>
                     <DialogTrigger asChild>
                       <Button size="sm">
@@ -876,7 +1155,7 @@ function ProjectDetailContent() {
                             >
                               <SelectTrigger id="expenseCategory">{expenseForm.category}</SelectTrigger>
                               <SelectContent>
-                                {MANUAL_EXPENSE_CATEGORIES.map((c) => (
+                                {expenseCategories.map((c) => (
                                   <SelectItem key={c} value={c}>
                                     {c}
                                   </SelectItem>
@@ -923,6 +1202,7 @@ function ProjectDetailContent() {
                       </form>
                     </DialogContent>
                   </Dialog>
+                  </div>
                 </div>
 
                 {expenses.length === 0 ? (
@@ -932,17 +1212,20 @@ function ProjectDetailContent() {
                     {expenses.map((exp) => (
                       <div
                         key={exp.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 p-3"
+                        className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-slate-200 p-3"
                       >
                         <div className="min-w-0">
-                          <p className="font-medium text-slate-900">
-                            {exp.category} · {exp.date}
+                          <p className="flex flex-wrap items-center gap-2 font-medium text-slate-900">
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${categoryColor(exp.category)}`}>
+                              {exp.category}
+                            </span>
+                            <span className="text-slate-500">{exp.date}</span>
                           </p>
                           {exp.description && (
                             <p className="text-xs text-slate-500">{exp.description}</p>
                           )}
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex shrink-0 items-center gap-3">
                           <span className="text-sm font-medium text-slate-900">{inr(exp.amount)}</span>
                           <button onClick={() => handleDeleteExpense(exp.id)}>
                             <Trash2 className="h-4 w-4 text-slate-400 hover:text-red-600" />
@@ -955,8 +1238,26 @@ function ProjectDetailContent() {
               </CardContent>
             </Card>
           )}
-        </div>
       </div>
+
+      {assignDialogEvent && (
+        <AssignTeamDialog
+          open={!!assignDialogEvent}
+          onOpenChange={(v) => {
+            if (!v) setAssignDialogEvent(null);
+          }}
+          projectId={id}
+          eventId={assignDialogEvent.id}
+          eventName={assignDialogEvent.eventName}
+          clientName={project?.clientName}
+          onUpdated={(updatedEvent) => {
+            setEvents((prev) =>
+              prev.map((e) => (e.id === updatedEvent.id ? { ...e, ...updatedEvent } : e))
+            );
+            setAssignDialogEvent(updatedEvent);
+          }}
+        />
+      )}
     </AppShell>
   );
 }

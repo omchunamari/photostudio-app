@@ -21,7 +21,7 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import RichTextEditor from "@/components/quotes/RichTextEditor";
-import { Plus, Trash2, X } from "lucide-react";
+import { Plus, Trash2, X, CalendarOff } from "lucide-react";
 import { toast } from "sonner";
 import {
   getOrgQuoteSettings,
@@ -39,6 +39,8 @@ import {
   updatePaymentScheduleTemplate,
   deletePaymentScheduleTemplate,
 } from "@/lib/firebase/quoteSettings";
+import { getOrgHolidays, saveOrgHolidays } from "@/lib/firebase/holidays";
+import { formatMonthDay, sortByMonthDay } from "@/lib/holidays";
 import { blankEvent } from "@/lib/constants/quotations";
 
 function SettingsContent() {
@@ -55,6 +57,7 @@ function SettingsContent() {
           <TabsTrigger value="packages">Packages</TabsTrigger>
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="schedules">Payment Schedules</TabsTrigger>
+          <TabsTrigger value="holidays">Holidays</TabsTrigger>
         </TabsList>
 
         <TabsContent value="org">
@@ -68,6 +71,9 @@ function SettingsContent() {
         </TabsContent>
         <TabsContent value="schedules">
           <ScheduleTemplatesPanel />
+        </TabsContent>
+        <TabsContent value="holidays">
+          <HolidaysPanel />
         </TabsContent>
       </Tabs>
     </AppShell>
@@ -700,6 +706,122 @@ function ScheduleTemplatesPanel() {
         </div>
       )}
     </div>
+  );
+}
+
+function HolidaysPanel() {
+  const [holidays, setHolidays] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState("");
+  const [monthDay, setMonthDay] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setHolidays(sortByMonthDay(await getOrgHolidays()));
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function persist(next) {
+    setSaving(true);
+    try {
+      const sorted = sortByMonthDay(next);
+      await saveOrgHolidays(sorted);
+      setHolidays(sorted);
+      toast.success("Holidays saved");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleAdd(e) {
+    e.preventDefault();
+    if (!name.trim() || !monthDay) return;
+    // <input type="date"> gives "YYYY-MM-DD" — we only keep the MM-DD part
+    // since these holidays recur every year on a fixed calendar date.
+    const md = monthDay.slice(5, 10);
+    if (holidays.some((h) => h.monthDay === md)) {
+      toast.error("A holiday is already set for that date.");
+      return;
+    }
+    const next = [...holidays, { id: crypto.randomUUID(), name: name.trim(), monthDay: md }];
+    setName("");
+    setMonthDay("");
+    persist(next);
+  }
+
+  function handleRemove(id) {
+    persist(holidays.filter((h) => h.id !== id));
+  }
+
+  if (loading) return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+
+  return (
+    <Card className="mt-4">
+      <CardContent className="flex flex-col gap-6 p-4">
+        <div>
+          <h3 className="mb-1 flex items-center gap-2 text-base font-medium text-foreground">
+            <CalendarOff className="h-4 w-4 text-muted-foreground" />
+            Yearly Fixed Holidays
+          </h3>
+          <p className="mb-4 text-sm text-muted-foreground">
+            These dates repeat every year (Republic Day, Independence Day, etc.). On a
+            holiday — and on Sundays — nobody is required to submit a Daily Report, and
+            they won&rsquo;t show up as &ldquo;missing&rdquo; on the admin report view.
+          </p>
+
+          <form onSubmit={handleAdd} className="mb-4 flex flex-wrap items-end gap-3">
+            <div className="min-w-[10rem] flex-1">
+              <Label>Holiday name</Label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Republic Day"
+              />
+            </div>
+            <div>
+              <Label>Date (any year)</Label>
+              <Input type="date" value={monthDay} onChange={(e) => setMonthDay(e.target.value)} />
+            </div>
+            <Button type="submit" disabled={saving || !name.trim() || !monthDay}>
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              Add
+            </Button>
+          </form>
+
+          {holidays.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No holidays configured yet.</p>
+          ) : (
+            <div className="flex flex-col divide-y divide-border rounded-md border border-border">
+              {holidays.map((h) => (
+                <div key={h.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="flex items-center gap-3">
+                    <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-foreground">
+                      {formatMonthDay(h.monthDay)}
+                    </span>
+                    <span className="text-sm text-foreground">{h.name}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={saving}
+                    onClick={() => handleRemove(h.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

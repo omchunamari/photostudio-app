@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import {
   getLeadById,
   updateLeadStatus,
+  updateLeadPriority,
   updateLead,
   deleteLead,
   getLeadActivities,
@@ -25,6 +26,7 @@ import {
 import { createProject, getProjectByLeadId } from "@/lib/firebase/projects";
 import {
   LEAD_STATUSES,
+  LEAD_PRIORITIES,
   PROJECT_TYPES,
   LEAD_SOURCES,
   ACTIVITY_TYPES,
@@ -115,7 +117,7 @@ function LeadDetailContent() {
   const [editingLead, setEditingLead] = useState(false);
   const [leadForm, setLeadForm] = useState({
     phone: "", email: "", projectType: "", eventDate: "", eventDetails: "",
-    source: "", budget: "", handledByUid: "",
+    source: "", budget: "", handledByUid: "", priority: "",
   });
   const [savingLead, setSavingLead] = useState(false);
   const [deletingLead, setDeletingLead] = useState(false);
@@ -203,6 +205,16 @@ function LeadDetailContent() {
     }
   }
 
+  async function handleLeadPriorityChange(priority) {
+    try {
+      await updateLeadPriority(id, priority);
+      setLead((prev) => ({ ...prev, priority }));
+      toast.success("Priority updated");
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
   function openEditLead() {
     setLeadForm({
       phone: lead.phone || "",
@@ -213,6 +225,7 @@ function LeadDetailContent() {
       source: lead.source || "",
       budget: String(lead.budget ?? ""),
       handledByUid: lead.handledByUid || "",
+      priority: lead.priority || "",
     });
     setEditingLead(true);
   }
@@ -368,7 +381,7 @@ function LeadDetailContent() {
           <Button onClick={handleConvertToProject} disabled={converting}>
             {converting ? "Converting..." : "Convert to Project"}
           </Button>
-          {lead.status !== "Lost" && lead.status !== "Won" && (
+          {!["Lost", "Converted", "No Response", "Won"].includes(lead.status) && (
             <Button variant="outline" className="text-red-600 hover:text-red-700" onClick={handleMarkLostDirect}>
               Mark Lost
             </Button>
@@ -412,6 +425,23 @@ function LeadDetailContent() {
           <SelectContent>
             {LEAD_STATUSES.map((s) => (
               <SelectItem key={s} value={s}>{s}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={lead.priority || ""} onValueChange={handleLeadPriorityChange}>
+          <SelectTrigger className="h-8 w-auto border-none bg-transparent p-0 shadow-none [&>svg]:ml-1">
+            {lead.priority ? (
+              <StatusBadge status={lead.priority} className="h-7 px-3 text-sm" />
+            ) : (
+              <span className="flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1 text-sm text-muted-foreground">
+                Set priority
+              </span>
+            )}
+          </SelectTrigger>
+          <SelectContent>
+            {LEAD_PRIORITIES.map((p) => (
+              <SelectItem key={p} value={p}>{p}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -609,6 +639,17 @@ function LeadDetailContent() {
                     <Label htmlFor="leadBudget">Quoted Amount</Label>
                     <Input id="leadBudget" type="number" min="0" value={leadForm.budget} onChange={(e) => updateLeadForm("budget", e.target.value)} />
                   </div>
+                </div>
+                <div>
+                  <Label>Priority</Label>
+                  <Select value={leadForm.priority} onValueChange={(v) => updateLeadForm("priority", v)}>
+                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      {LEAD_PRIORITIES.map((p) => (
+                        <SelectItem key={p} value={p}>{p}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Handled By</Label>

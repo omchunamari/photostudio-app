@@ -17,7 +17,10 @@ export async function createProject(data, createdByUid) {
   const now = new Date().toISOString();
   const ref = await addDoc(collection(db, "projects"), {
     projectName: data.projectName,
-    leadId: data.leadId,
+    // Standalone projects (created directly from the Projects list rather
+    // than via "Convert to Project" on a lead) have no lead — must fall
+    // back to null since Firestore's addDoc rejects `undefined` fields.
+    leadId: data.leadId ?? null,
     // Firestore's addDoc rejects any field whose value is `undefined`, so
     // this must never be left as data.quotationId directly — always fall
     // back to null when no quote was passed in.

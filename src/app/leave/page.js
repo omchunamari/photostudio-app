@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import StatusBadge from "@/components/ui/status-badge";
+import { Search, Download } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "hr"];
 
@@ -294,109 +295,145 @@ function LeaveContent() {
     toast.success("Exported to Excel/CSV");
   }
 
+  // Row-level accent so pending/rejected items are scannable at a glance
+  // without repeating the status text everywhere.
+  function rowAccent(status) {
+    switch (status) {
+      case "approved":
+        return "border-l-emerald-500";
+      case "rejected":
+        return "border-l-red-400";
+      case "pending":
+        return "border-l-amber-400";
+      case "auto_leave":
+        return "border-l-slate-300";
+      default:
+        return "border-l-slate-200";
+    }
+  }
+
   return (
     <AppShell>
-      <h2 className="mb-6 text-xl font-semibold text-slate-900 sm:text-2xl">Leave Management</h2>
+      <div className="mb-7">
+        <h2 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-[1.7rem]">Leave Management</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          {isAdminView
+            ? "Review and decide on leave, comp off, and auto-marked requests."
+            : "Apply for leave and keep track of where each request stands."}
+        </p>
+      </div>
 
       {!isAdminView && (
-        <Card className="mb-6 max-w-xl">
-          <CardContent className="p-5">
-            <h3 className="mb-3 font-medium text-slate-900">Your Leave Balance</h3>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {LEAVE_TYPES.map((type) => {
-                const balance = user.leaveBalance?.[type] ?? 0;
-                return (
-                  <div key={type} className="rounded-md border border-slate-200 p-2 text-center">
-                    <p className="text-xs text-slate-500">{type}</p>
-                    <p className={`text-lg font-bold ${balance < 0 ? "text-red-600" : "text-slate-900"}`}>
-                      {balance}
-                    </p>
+        <Card className="mb-8 overflow-hidden border-slate-200">
+          <CardContent className="grid grid-cols-1 p-0 lg:grid-cols-[1fr_1.4fr]">
+            {/* Balance strip */}
+            <div className="border-b border-slate-100 p-5 lg:border-b-0 lg:border-r">
+              <h3 className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Your Balance
+              </h3>
+              <div className="flex flex-col divide-y divide-slate-100">
+                {LEAVE_TYPES.map((type) => {
+                  const balance = user.leaveBalance?.[type] ?? 0;
+                  return (
+                    <div key={type} className="flex items-baseline justify-between py-2 first:pt-0 last:pb-0">
+                      <span className="text-sm text-slate-600">{type}</span>
+                      <span className={`text-lg font-semibold tabular-nums ${balance < 0 ? "text-red-600" : "text-slate-900"}`}>
+                        {balance}
+                        <span className="ml-1 text-xs font-normal text-slate-400">
+                          day{balance !== 1 && "s"}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Apply form */}
+            <div className="p-5">
+              <h3 className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Apply for Leave
+              </h3>
+              <form onSubmit={handleApply} className="flex flex-col gap-3.5">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-medium text-slate-500">Leave Type</Label>
+                    <Select value={form.leaveType} onValueChange={(v) => updateForm("leaveType", v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {LEAVE_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>{type}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                );
-              })}
+                  <div>
+                    <Label htmlFor="reason" className="text-xs font-medium text-slate-500">Reason</Label>
+                    <Input
+                      id="reason"
+                      value={form.reason}
+                      onChange={(e) => updateForm("reason", e.target.value)}
+                      placeholder="Optional"
+                    />
+                  </div>
+                </div>
+                <p className={`-mt-1.5 text-xs ${insufficientBalance ? "font-medium text-red-600" : "text-slate-500"}`}>
+                  Available: {selectedBalance} day{selectedBalance !== 1 && "s"}
+                  {insufficientBalance && " — insufficient balance to apply"}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="startDate" className="text-xs font-medium text-slate-500">Start Date</Label>
+                    <Input
+                      id="startDate"
+                      type="date"
+                      value={form.startDate}
+                      onChange={(e) => updateForm("startDate", e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="endDate" className="text-xs font-medium text-slate-500">End Date</Label>
+                    <Input
+                      id="endDate"
+                      type="date"
+                      value={form.endDate}
+                      onChange={(e) => updateForm("endDate", e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+                <Button type="submit" disabled={submitting || insufficientBalance} className="mt-1 self-start">
+                  {submitting ? "Submitting..." : "Apply Leave"}
+                </Button>
+              </form>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {!isAdminView && (
-        <Card className="mb-8 max-w-xl">
-          <CardContent className="p-5">
-            <h3 className="mb-4 font-medium text-slate-900">Apply for Leave</h3>
-            <form onSubmit={handleApply} className="flex flex-col gap-4">
-              <div>
-                <Label>Leave Type</Label>
-                <Select value={form.leaveType} onValueChange={(v) => updateForm("leaveType", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {LEAVE_TYPES.map((type) => (
-                      <SelectItem key={type} value={type}>{type}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className={`mt-1 text-xs ${insufficientBalance ? "text-red-600" : "text-slate-500"}`}>
-                  Available: {selectedBalance} day(s)
-                  {insufficientBalance && " — insufficient balance to apply"}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="startDate">Start Date</Label>
-                  <Input
-                    id="startDate"
-                    type="date"
-                    value={form.startDate}
-                    onChange={(e) => updateForm("startDate", e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="endDate">End Date</Label>
-                  <Input
-                    id="endDate"
-                    type="date"
-                    value={form.endDate}
-                    onChange={(e) => updateForm("endDate", e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="reason">Reason</Label>
-                <Input
-                  id="reason"
-                  value={form.reason}
-                  onChange={(e) => updateForm("reason", e.target.value)}
-                  placeholder="Optional"
-                />
-              </div>
-              <Button type="submit" disabled={submitting || insufficientBalance}>
-                {submitting ? "Submitting..." : "Apply Leave"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="mb-3 flex flex-col gap-3">
+      <div className="mb-4 flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-base font-medium text-slate-900 sm:text-lg">
+          <h3 className="text-base font-semibold text-slate-900 sm:text-lg">
             {isAdminView ? "All Leave Requests" : "Your Leave History"}
           </h3>
           {isAdminView && (
             <Button size="sm" variant="secondary" onClick={exportToExcel}>
-              Export to Excel
+              <Download className="h-3.5 w-3.5" /> Export to Excel
             </Button>
           )}
         </div>
         {isAdminView && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              placeholder="Search by employee, department, reason..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full max-w-xs"
-            />
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
+            <div className="relative w-full max-w-xs">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <Input
+                placeholder="Search by employee, department, reason..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-8"
+              />
+            </div>
             <Select value={filterMonth} onValueChange={setFilterMonth}>
               <SelectTrigger className="w-[140px]"><SelectValue placeholder="Month" /></SelectTrigger>
               <SelectContent>
@@ -432,54 +469,59 @@ function LeaveContent() {
 
       {loading ? (
         <p className="text-sm text-slate-500">Loading...</p>
-      ) : (
-        <div className="grid gap-3">
-          {visibleRequests.length === 0 ? (
-            <p className="text-sm text-slate-500">No leave requests found.</p>
-          ) : (
-            visibleRequests.map((req) => (
-              <Card key={req.id}>
-                <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    {isAdminView && (
-                      <p className="font-medium text-slate-900">{req.employeeName}</p>
-                    )}
-                    <p className="text-sm text-slate-700">
-                      {req.leaveType} · {req.startDate} to {req.endDate}
-                    </p>
-                    {req.reason && <p className="text-xs text-slate-500">{req.reason}</p>}
-                    {req.status === "rejected" && req.rejectionReason && (
-                      <p className="text-xs text-red-600">Rejected: {req.rejectionReason}</p>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <StatusBadge status={req.status} />
-                    {isAdminView && req.status === "pending" && req.kind === "leave" && (
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={() => handleApprove(req)}>
-                          Approve
-                        </Button>
-                        <Button size="sm" variant="secondary" onClick={() => openRejectDialog(req)}>
-                          Reject
-                        </Button>
-                      </div>
-                    )}
-                    {isAdminView && req.status === "pending" && req.kind === "compoff" && (
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={() => handleCompOffDecision(req, "approved")}>
-                          Approve
-                        </Button>
-                        <Button size="sm" variant="secondary" onClick={() => handleCompOffDecision(req, "rejected")}>
-                          Reject
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
+      ) : visibleRequests.length === 0 ? (
+        <div className="rounded-md border border-dashed border-slate-200 py-10 text-center">
+          <p className="text-sm text-slate-500">No leave requests found.</p>
         </div>
+      ) : (
+        <Card className="overflow-hidden border-slate-200 p-0">
+          <div className="flex flex-col divide-y divide-slate-100">
+            {visibleRequests.map((req) => (
+              <div
+                key={req.id}
+                className={`flex flex-col gap-2.5 border-l-[3px] px-4 py-3 transition-colors hover:bg-slate-50/70 sm:flex-row sm:items-center sm:justify-between sm:gap-3 ${rowAccent(req.status)}`}
+              >
+                <div className="min-w-0">
+                  <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    {isAdminView && (
+                      <span className="font-medium text-slate-900">{req.employeeName}</span>
+                    )}
+                    <span className="text-sm text-slate-700">
+                      {req.leaveType} <span className="text-slate-300">·</span> {req.startDate} to {req.endDate}
+                    </span>
+                  </p>
+                  {req.reason && <p className="mt-0.5 text-xs text-slate-500">{req.reason}</p>}
+                  {req.status === "rejected" && req.rejectionReason && (
+                    <p className="mt-0.5 text-xs font-medium text-red-600">Rejected: {req.rejectionReason}</p>
+                  )}
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2.5">
+                  <StatusBadge status={req.status} />
+                  {isAdminView && req.status === "pending" && req.kind === "leave" && (
+                    <div className="flex gap-1.5">
+                      <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => handleApprove(req)}>
+                        Approve
+                      </Button>
+                      <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => openRejectDialog(req)}>
+                        Reject
+                      </Button>
+                    </div>
+                  )}
+                  {isAdminView && req.status === "pending" && req.kind === "compoff" && (
+                    <div className="flex gap-1.5">
+                      <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => handleCompOffDecision(req, "approved")}>
+                        Approve
+                      </Button>
+                      <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => handleCompOffDecision(req, "rejected")}>
+                        Reject
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       )}
 
       <Dialog open={!!rejectTarget} onOpenChange={(open) => !open && setRejectTarget(null)}>
@@ -488,7 +530,7 @@ function LeaveContent() {
             <DialogTitle>Reject Leave Request</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3">
-            <Label htmlFor="rejectionReason">Reason for rejection</Label>
+            <Label htmlFor="rejectionReason" className="text-xs font-medium text-slate-500">Reason for rejection</Label>
             <Input
               id="rejectionReason"
               value={rejectionReason}

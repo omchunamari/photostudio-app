@@ -9,6 +9,7 @@ import {
   createLead,
   getAllLeads,
   updateLeadStatus,
+  updateLeadPriority,
   deleteLead,
 } from "@/lib/firebase/leads";
 import { getAllEmployees } from "@/lib/firebase/employees";
@@ -16,6 +17,7 @@ import {
   LEAD_STATUSES,
   PROJECT_TYPES,
   LEAD_SOURCES,
+  LEAD_PRIORITIES,
 } from "@/lib/constants/leads";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,6 +81,7 @@ const emptyForm = {
   source: "",
   budget: "",
   handledByUid: "",
+  priority: "",
 };
 
 function LeadsContent() {
@@ -95,6 +98,7 @@ function LeadsContent() {
   const [tab, setTab] = useState("all"); // "all" | "uncontacted" | "followups"
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("all"); // "all" | one of LEAD_STATUSES
+  const [priorityFilter, setPriorityFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [execFilter, setExecFilter] = useState("all");
 
@@ -155,6 +159,16 @@ function LeadsContent() {
     }
   }
 
+  async function handlePriorityChange(lead, priority) {
+    try {
+      await updateLeadPriority(lead.id, priority);
+      setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, priority } : l)));
+      toast.success("Priority updated");
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
   async function handleDelete(lead) {
     setDeletingId(lead.id);
     try {
@@ -169,11 +183,11 @@ function LeadsContent() {
   }
 
   function handleExport() {
-    const header = ["Client Name", "Phone", "Email", "Event Type", "Tentative Event Date", "Event Details", "Quoted Amount", "Source", "Stage", "Handled By", "Follow Up", "Added"];
+    const header = ["Client Name", "Phone", "Email", "Event Type", "Tentative Event Date", "Event Details", "Quoted Amount", "Source", "Stage", "Priority", "Handled By", "Follow Up", "Added"];
     const rows = filteredLeads.map((l) => [
       l.clientName, l.phone, l.email, l.projectType || "", l.eventDate || "",
       (l.eventDetails || "").replace(/\n/g, " "), l.budget || 0, l.source || "",
-      l.status, l.handledByName || "", l.followUpDate || "", (l.createdAt || "").slice(0, 10),
+      l.status, l.priority || "", l.handledByName || "", l.followUpDate || "", (l.createdAt || "").slice(0, 10),
     ]);
     const csv = [header, ...rows]
       .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
@@ -188,8 +202,12 @@ function LeadsContent() {
   }
 
   const today = new Date().toISOString().slice(0, 10);
+  // "Won"/"Quoted" are older stage values kept readable for leads created
+  // before the pipeline changed — not closed out, so still eligible for a
+  // follow-up nudge same as any other non-terminal stage.
+  const CLOSED_STATUSES = ["Converted", "Lost", "No Response", "Won"];
   function isOverdue(lead) {
-    return lead.followUpDate && lead.followUpDate < today && lead.status !== "Won" && lead.status !== "Lost";
+    return lead.followUpDate && lead.followUpDate < today && !CLOSED_STATUSES.includes(lead.status);
   }
   function isUncontacted(lead) {
     return lead.status === "New Inquiry";
@@ -199,13 +217,14 @@ function LeadsContent() {
     return leads
       .filter((l) => {
         if (tab === "uncontacted") return isUncontacted(l);
-        if (tab === "followups") return !!l.followUpDate && l.status !== "Won" && l.status !== "Lost";
+        if (tab === "followups") return !!l.followUpDate && !CLOSED_STATUSES.includes(l.status);
         return true;
       })
       .filter((l) => {
         if (stageFilter === "all") return true;
         return l.status === stageFilter;
       })
+      .filter((l) => priorityFilter === "all" || l.priority === priorityFilter)
       .filter((l) => sourceFilter === "all" || l.source === sourceFilter)
       .filter((l) => execFilter === "all" || l.handledByUid === execFilter)
       .filter((l) => {
@@ -219,7 +238,7 @@ function LeadsContent() {
       })
       // Overdue follow-ups float to the top so nothing slips through.
       .sort((a, b) => Number(isOverdue(b)) - Number(isOverdue(a)));
-  }, [leads, tab, stageFilter, sourceFilter, execFilter, search]);
+  }, [leads, tab, stageFilter, priorityFilter, sourceFilter, execFilter, search]);
 
   return (
     <AppShell>
@@ -348,6 +367,17 @@ function LeadsContent() {
                   </div>
                 </div>
                 <div>
+                  <Label>Priority</Label>
+                  <Select value={form.priority} onValueChange={(v) => updateForm("priority", v)}>
+                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      {LEAD_PRIORITIES.map((p) => (
+                        <SelectItem key={p} value={p}>{p}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
                   <Label>Handled By</Label>
                   <Select value={form.handledByUid} onValueChange={(v) => updateForm("handledByUid", v)}>
                     <SelectTrigger>
@@ -417,6 +447,17 @@ function LeadsContent() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+          <SelectTrigger className="w-full sm:w-[140px]">
+            <SelectValue>{(v) => (v === "all" ? "All priorities" : v)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All priorities</SelectItem>
+            {LEAD_PRIORITIES.map((p) => (
+              <SelectItem key={p} value={p}>{p}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={sourceFilter} onValueChange={setSourceFilter}>
           <SelectTrigger className="w-full sm:w-[150px]">
             <SelectValue>{(v) => (v === "all" ? "All sources" : v)}</SelectValue>
@@ -460,6 +501,7 @@ function LeadsContent() {
                 <TableHead className="w-8"><Checkbox /></TableHead>
                 <TableHead>Client</TableHead>
                 <TableHead>Stage</TableHead>
+                <TableHead>Priority</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Handled By</TableHead>
                 <TableHead>Event</TableHead>
@@ -488,6 +530,22 @@ function LeadsContent() {
                       <SelectContent>
                         {LEAD_STATUSES.map((s) => (
                           <SelectItem key={s} value={s}>{s}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Select value={lead.priority || ""} onValueChange={(v) => handlePriorityChange(lead, v)}>
+                      <SelectTrigger className="h-7 w-auto border-none bg-transparent p-0 shadow-none [&>svg]:ml-1">
+                        {lead.priority ? (
+                          <StatusBadge status={lead.priority} />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LEAD_PRIORITIES.map((p) => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -548,7 +606,10 @@ function LeadsContent() {
               <CardContent className="flex flex-col gap-2 p-4">
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-medium text-foreground">{lead.clientName}</span>
-                  <StatusBadge status={lead.status} />
+                  <div className="flex items-center gap-1.5">
+                    {lead.priority && <StatusBadge status={lead.priority} />}
+                    <StatusBadge status={lead.status} />
+                  </div>
                 </div>
                 <p className="text-xs text-muted-foreground">{lead.phone || lead.email || "—"}</p>
                 <p className="text-xs text-muted-foreground">

@@ -73,6 +73,8 @@ function EventDetailContent() {
   const [assignCost, setAssignCost] = useState("");
   const [assignCostLabel, setAssignCostLabel] = useState("Full Day");
   const [savingTeam, setSavingTeam] = useState(false);
+  const [editingCostUid, setEditingCostUid] = useState(null);
+  const [editingCostValue, setEditingCostValue] = useState("");
   const [deleting, setDeleting] = useState(false);
 
   const [detailsForm, setDetailsForm] = useState({
@@ -81,6 +83,7 @@ function EventDetailContent() {
     eventEndDate: "",
   });
   const [savingDetails, setSavingDetails] = useState(false);
+  const [editingName, setEditingName] = useState(false);
 
   async function loadData() {
     setLoading(true);
@@ -170,24 +173,23 @@ function EventDetailContent() {
     setAssignCostLabel("Full Day");
   }, [selectedKey, freelancers]);
 
-  async function handleSaveDetails(e) {
-    e.preventDefault();
-    if (
-      detailsForm.eventStartDate &&
-      detailsForm.eventEndDate &&
-      detailsForm.eventEndDate < detailsForm.eventStartDate
-    ) {
+  async function saveDetails(values, { silent } = {}) {
+    if (values.eventStartDate && values.eventEndDate && values.eventEndDate < values.eventStartDate) {
       toast.error("End date can't be before start date");
+      return;
+    }
+    if (!values.eventName?.trim()) {
+      toast.error("Event name is required");
       return;
     }
     setSavingDetails(true);
     try {
       await updateEventDetails(projectId, eventId, {
-        eventName: detailsForm.eventName,
-        eventStartDate: detailsForm.eventStartDate,
-        eventEndDate: detailsForm.eventEndDate || detailsForm.eventStartDate,
+        eventName: values.eventName,
+        eventStartDate: values.eventStartDate,
+        eventEndDate: values.eventEndDate || values.eventStartDate,
       });
-      toast.success("Event details updated");
+      if (!silent) toast.success("Event details updated");
       loadData();
     } catch (err) {
       toast.error(err.message);
@@ -196,6 +198,10 @@ function EventDetailContent() {
     }
   }
 
+  async function handleSaveDetails(e) {
+    e.preventDefault();
+    await saveDetails(detailsForm);
+  }
   async function handleStatusChange(status) {
     try {
       await updateEventStatus(projectId, eventId, status);
@@ -286,6 +292,27 @@ function EventDetailContent() {
     }
   }
 
+  async function handleUpdateMemberCost(uid, newCost) {
+    const cost = Number(newCost);
+    if (Number.isNaN(cost) || cost < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingTeam(true);
+    try {
+      const newTeam = (event.team || []).map((m) =>
+        m.uid === uid ? { ...m, cost } : m
+      );
+      await updateEventTeam(projectId, eventId, newTeam, event.status);
+      toast.success("Amount updated");
+      loadData();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingTeam(false);
+    }
+  }
+
   async function handleRemoveMember(uid) {
     setSavingTeam(true);
     try {
@@ -351,29 +378,89 @@ function EventDetailContent() {
     <AppShell>
       <button
         onClick={() => router.push(`/projects/${projectId}`)}
-        className="mb-3 flex items-center gap-1 text-sm text-slate-500 transition-colors hover:text-slate-900"
+        className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
-        <ArrowLeft className="h-4 w-4" /> Back to {event.projectName}
+        <ArrowLeft className="h-3.5 w-3.5" /> {event.projectName}
       </button>
 
-      <div className="sticky top-0 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white/95 py-4 backdrop-blur supports-[backdrop-filter]:bg-white/80 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
+      <div className="sticky top-0 z-10 mb-8 flex flex-col gap-4 border-b border-border bg-background/90 py-5 backdrop-blur supports-[backdrop-filter]:bg-background/75 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="aperture-ring flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
             <CalendarDays className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">
-              {event.eventName}
-            </h2>
-            <p className="text-sm text-slate-500">
-              {event.clientName}
+            {editingName ? (
+              <Input
+                autoFocus
+                value={detailsForm.eventName}
+                onChange={(e) => setDetailsForm((p) => ({ ...p, eventName: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  else if (e.key === "Escape") {
+                    setDetailsForm((p) => ({ ...p, eventName: event.eventName }));
+                    setEditingName(false);
+                  }
+                }}
+                onBlur={() => {
+                  setEditingName(false);
+                  if (detailsForm.eventName.trim() && detailsForm.eventName !== event.eventName) {
+                    saveDetails(detailsForm, { silent: true });
+                  } else {
+                    setDetailsForm((p) => ({ ...p, eventName: event.eventName }));
+                  }
+                }}
+                className="h-auto border-transparent px-1 -mx-1 py-0 font-heading text-2xl font-semibold tracking-tight text-foreground shadow-none focus-visible:border-ring sm:text-[1.75rem]"
+              />
+            ) : (
+              <h2
+                onClick={() => isAdminOrPM && setEditingName(true)}
+                title={isAdminOrPM ? "Click to rename" : undefined}
+                className={`truncate rounded px-1 -mx-1 text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem] ${
+                  isAdminOrPM ? "cursor-text hover:bg-muted" : ""
+                }`}
+              >
+                {event.eventName}
+              </h2>
+            )}
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+              <span>{event.clientName}</span>
+              <span className="text-muted-foreground/50">·</span>
+              <input
+                type="date"
+                value={detailsForm.eventStartDate}
+                disabled={!isAdminOrPM}
+                onChange={(e) => {
+                  const eventStartDate = e.target.value;
+                  const eventEndDate =
+                    detailsForm.eventEndDate && detailsForm.eventEndDate < eventStartDate
+                      ? eventStartDate
+                      : detailsForm.eventEndDate;
+                  const next = { ...detailsForm, eventStartDate, eventEndDate };
+                  setDetailsForm(next);
+                  saveDetails(next, { silent: true });
+                }}
+                className="rounded border-none bg-transparent p-0 text-sm text-muted-foreground [color-scheme:light] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <span className="text-muted-foreground/50">–</span>
+              <input
+                type="date"
+                value={detailsForm.eventEndDate}
+                min={detailsForm.eventStartDate || undefined}
+                disabled={!isAdminOrPM}
+                onChange={(e) => {
+                  const next = { ...detailsForm, eventEndDate: e.target.value };
+                  setDetailsForm(next);
+                  saveDetails(next, { silent: true });
+                }}
+                className="rounded border-none bg-transparent p-0 text-sm text-muted-foreground [color-scheme:light] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
               {detailsShootDays > 0 && (
-                <span className="text-slate-400">
-                  {" "}
+                <span className="text-muted-foreground/70">
                   · {detailsShootDays} shoot day{detailsShootDays !== 1 && "s"}
                 </span>
               )}
-            </p>
+              {savingDetails && <span className="text-muted-foreground/50">Saving…</span>}
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:pl-2">
@@ -418,66 +505,16 @@ function EventDetailContent() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6">
         <Card className="overflow-hidden">
-          <CardContent className="p-4 sm:p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <CalendarDays className="h-4 w-4 text-slate-400" />
-              <h3 className="font-medium text-slate-900">Event Details</h3>
-            </div>
-            <form onSubmit={handleSaveDetails} className="flex flex-col gap-3">
-              <div>
-                <Label htmlFor="eventName">Event Name</Label>
-                <Input
-                  id="eventName"
-                  value={detailsForm.eventName}
-                  onChange={(e) => setDetailsForm((p) => ({ ...p, eventName: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="eventStartDate">Start Date</Label>
-                  <Input
-                    id="eventStartDate"
-                    type="date"
-                    value={detailsForm.eventStartDate}
-                    onChange={(e) =>
-                      setDetailsForm((p) => ({
-                        ...p,
-                        eventStartDate: e.target.value,
-                        eventEndDate:
-                          p.eventEndDate && p.eventEndDate < e.target.value ? e.target.value : p.eventEndDate,
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="eventEndDate">End Date</Label>
-                  <Input
-                    id="eventEndDate"
-                    type="date"
-                    min={detailsForm.eventStartDate || undefined}
-                    value={detailsForm.eventEndDate}
-                    onChange={(e) => setDetailsForm((p) => ({ ...p, eventEndDate: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-slate-500">{detailsShootDays} shoot day{detailsShootDays !== 1 && "s"}</p>
-              <Button type="submit" disabled={savingDetails} className="w-full">
-                {savingDetails ? "Saving..." : "Save Details"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card className="overflow-hidden">
-          <CardContent className="p-4 sm:p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <Users2 className="h-4 w-4 text-slate-400" />
-              <h3 className="font-medium text-slate-900">Team Assignment</h3>
+          <CardContent className="p-5 sm:p-6">
+            <div className="mb-5 flex items-center gap-2.5">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/12 text-accent">
+                <Users2 className="h-3.5 w-3.5" />
+              </span>
+              <h3 className="font-heading text-base font-semibold text-foreground">Team Assignment</h3>
               {(event.team || []).length > 0 && (
-                <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                <span className="ml-auto rounded-full bg-accent/12 px-2.5 py-0.5 text-[11px] font-medium text-accent">
                   {event.team.length} assigned
                 </span>
               )}
@@ -488,12 +525,12 @@ function EventDetailContent() {
                 <Label>Employee or Freelancer</Label>
                 <Select value={selectedKey} onValueChange={setSelectedKey}>
                   <SelectTrigger>
-                    {selectedLabel || <span className="text-slate-400">Select employee or freelancer</span>}
+                    {selectedLabel || <span className="text-muted-foreground">Select employee or freelancer</span>}
                   </SelectTrigger>
                   <SelectContent>
                     {employees.length > 0 && (
                       <>
-                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                           Employees
                         </p>
                         {employees.map((e) => (
@@ -505,7 +542,7 @@ function EventDetailContent() {
                     )}
                     {freelancers.length > 0 && (
                       <>
-                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                           Freelancers
                         </p>
                         {freelancers.map((f) => (
@@ -559,7 +596,7 @@ function EventDetailContent() {
                   />
                 </div>
                 {selectedKind === "freelancer" && (
-                  <p className="w-full text-[11px] text-slate-500">
+                  <p className="w-full text-[11px] text-muted-foreground">
                     Defaults to their profile day rate — override here for a project-specific rate.
                     This also feeds the Expenses payout suggestion.
                   </p>
@@ -578,64 +615,113 @@ function EventDetailContent() {
             )}
 
             {(event.team || []).length === 0 ? (
-              <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-slate-200 py-8 text-center">
-                <Users2 className="h-5 w-5 text-slate-300" />
-                <p className="text-sm text-slate-500">No team members assigned yet.</p>
+              <div className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border py-8 text-center">
+                <Users2 className="h-5 w-5 text-muted-foreground/50" />
+                <p className="text-sm text-muted-foreground">No team members assigned yet.</p>
               </div>
             ) : (
-              <div className="grid max-h-64 gap-2 overflow-y-auto pr-1">
+              <div className="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4">
                 {event.team.map((m) => {
                   const latestNote = (m.assignments || []).slice(-1)[0]?.text;
                   const teamName = m.sourceTeamId ? editorTeamsById[m.sourceTeamId] : null;
                   return (
                     <div
                       key={m.uid}
-                      className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm transition-colors hover:border-slate-300"
+                      className="group relative flex flex-col gap-1.5 rounded-lg border border-border bg-background/60 p-2.5 text-sm transition-colors hover:border-foreground/20"
                     >
-                      <AvatarInitials name={m.name} size="sm" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                            <span className="font-medium text-slate-900">{m.name}</span>
-                            {m.role && <span className="text-xs text-slate-400">{m.role}</span>}
-                          </span>
-                          <button
-                            onClick={() => handleRemoveMember(m.uid)}
-                            disabled={savingTeam}
-                            className="shrink-0 rounded-full p-1 hover:bg-red-50"
-                          >
-                            <X className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" />
-                          </button>
-                        </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          {m.type === "freelancer" && (
-                            <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600">
-                              Freelancer
-                            </span>
-                          )}
-                          {m.cost > 0 && (
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                              <Banknote className="h-3 w-3" />
-                              {m.costLabel || "Full Day"} · ₹{m.cost.toLocaleString("en-IN")}
-                            </span>
-                          )}
-                          {m.sourceTeamId ? (
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
-                              <Users2 className="h-3 w-3" /> {teamName || "Team"}
-                            </span>
-                          ) : (
-                            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                              Individual
-                            </span>
-                          )}
-                        </div>
-                        {latestNote && <p className="mt-1.5 text-xs text-slate-500">{latestNote}</p>}
-                        {(m.assignments?.length || 0) > 1 && (
-                          <p className="mt-1 text-[11px] text-slate-400">
-                            +{m.assignments.length - 1} earlier instruction{m.assignments.length - 1 !== 1 && "s"}
+                      <button
+                        onClick={() => handleRemoveMember(m.uid)}
+                        disabled={savingTeam}
+                        className="absolute right-1 top-1 rounded-full bg-background/80 p-1 opacity-100 hover:bg-red-50 sm:bg-transparent sm:p-0.5 sm:opacity-0 sm:group-hover:opacity-100"
+                      >
+                        <X className="h-3.5 w-3.5 text-muted-foreground hover:text-red-600 sm:h-3 sm:w-3" />
+                      </button>
+
+                      <div className="flex items-center gap-2 pr-4">
+                        <AvatarInitials name={m.name} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-foreground" title={m.name}>
+                            {m.name}
                           </p>
+                          {m.role && (
+                            <p className="truncate text-[10px] text-muted-foreground">{m.role}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1">
+                        {m.type === "freelancer" && (
+                          <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">
+                            Freelancer
+                          </span>
+                        )}
+                        {m.sourceTeamId ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600">
+                            <Users2 className="h-2.5 w-2.5" /> {teamName || "Team"}
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                            Individual
+                          </span>
                         )}
                       </div>
+
+                      {editingCostUid === m.uid ? (
+                        <span className="inline-flex w-fit items-center gap-1 rounded-full bg-accent/12 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                          <Banknote className="h-2.5 w-2.5 shrink-0" />
+                          {m.costLabel || "Full Day"} · ₹
+                          <input
+                            autoFocus
+                            type="number"
+                            min="0"
+                            value={editingCostValue}
+                            onChange={(e) => setEditingCostValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              } else if (e.key === "Escape") {
+                                setEditingCostUid(null);
+                              }
+                            }}
+                            onBlur={() => {
+                              setEditingCostUid(null);
+                              if (editingCostValue !== String(m.cost)) {
+                                handleUpdateMemberCost(m.uid, editingCostValue);
+                              }
+                            }}
+                            disabled={savingTeam}
+                            className="w-14 border-b border-accent bg-transparent text-[10px] font-medium text-accent outline-none"
+                          />
+                        </span>
+                      ) : (m.cost > 0 || isAdminOrPM) && (
+                        <button
+                          type="button"
+                          disabled={!isAdminOrPM}
+                          onClick={() => {
+                            if (!isAdminOrPM) return;
+                            setEditingCostValue(String(m.cost || 0));
+                            setEditingCostUid(m.uid);
+                          }}
+                          className={`inline-flex w-fit items-center gap-1 rounded-full bg-accent/12 px-1.5 py-0.5 text-[10px] font-medium text-accent ${
+                            isAdminOrPM ? "hover:bg-accent/20" : ""
+                          }`}
+                          title={isAdminOrPM ? "Click to edit amount" : undefined}
+                        >
+                          <Banknote className="h-2.5 w-2.5" />
+                          {m.costLabel || "Full Day"} · ₹{(m.cost || 0).toLocaleString("en-IN")}
+                        </button>
+                      )}
+
+                      {latestNote && (
+                        <p className="line-clamp-2 text-[10px] text-muted-foreground" title={latestNote}>
+                          {latestNote}
+                        </p>
+                      )}
+                      {(m.assignments?.length || 0) > 1 && (
+                        <p className="text-[9px] text-muted-foreground/70">
+                          +{m.assignments.length - 1} more note{m.assignments.length - 1 !== 1 && "s"}
+                        </p>
+                      )}
                     </div>
                   );
                 })}
@@ -646,19 +732,21 @@ function EventDetailContent() {
       </div>
 
       <Card className="mt-6 overflow-hidden">
-        <CardContent className="p-4 sm:p-5">
-          <div className="mb-1 flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-slate-400" />
-            <h3 className="font-medium text-slate-900">Team Updates</h3>
+        <CardContent className="p-5 sm:p-6">
+          <div className="mb-1 flex items-center gap-2.5">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/12 text-accent">
+              <MessageSquare className="h-3.5 w-3.5" />
+            </span>
+            <h3 className="font-heading text-base font-semibold text-foreground">Team Updates</h3>
           </div>
-          <p className="mb-3 text-xs text-slate-500">
+          <p className="mb-4 text-xs text-muted-foreground">
             Progress notes reported directly by team members assigned to this event.
           </p>
 
           {statusUpdates.filter((u) => (u.updates || []).length > 0).length === 0 ? (
-            <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-slate-200 py-8 text-center">
-              <MessageSquare className="h-5 w-5 text-slate-300" />
-              <p className="text-sm text-slate-500">No updates from the team yet.</p>
+            <div className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border py-8 text-center">
+              <MessageSquare className="h-5 w-5 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground">No updates from the team yet.</p>
             </div>
           ) : (
             <div className="grid max-h-72 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
@@ -667,20 +755,20 @@ function EventDetailContent() {
                 .map((u) => {
                   const latest = u.updates[u.updates.length - 1];
                   return (
-                    <div key={u.uid} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm">
+                    <div key={u.uid} className="flex items-start gap-3 rounded-lg border border-border bg-background/60 p-3 text-sm">
                       <AvatarInitials name={u.name} size="sm" />
                       <div className="min-w-0 flex-1">
                         <div className="mb-1 flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
-                          <span className="font-medium text-slate-900">{u.name}</span>
+                          <span className="font-medium text-foreground">{u.name}</span>
                           {latest?.updatedAt && (
-                            <span className="text-xs text-slate-400">
+                            <span className="text-xs text-muted-foreground">
                               {new Date(latest.updatedAt).toLocaleString()}
                             </span>
                           )}
                         </div>
-                        <p className="text-slate-600">{latest?.text}</p>
+                        <p className="text-muted-foreground">{latest?.text}</p>
                         {u.updates.length > 1 && (
-                          <p className="mt-1 text-[11px] text-slate-400">
+                          <p className="mt-1 text-[11px] text-muted-foreground/70">
                             +{u.updates.length - 1} earlier update{u.updates.length - 1 !== 1 && "s"}
                           </p>
                         )}

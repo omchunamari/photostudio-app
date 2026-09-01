@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -21,13 +21,85 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import StatusBadge from "@/components/ui/status-badge";
+import {
+  Users,
+  CheckCircle2,
+  Clock,
+  CalendarX,
+  Download,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "hr"];
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+// "present"/"late" both mean the person showed up; "auto_leave"/"on_leave"
+// both mean the day is booked against leave balance. Grouping them this
+// way keeps the summary cards and CSV totals meaningful regardless of
+// which of the two labels a given record happens to carry.
+const PRESENT_STATUSES = ["present", "late"];
+const LEAVE_STATUSES = ["auto_leave", "on_leave"];
+
+function formatTime(iso) {
+  return iso
+    ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "-";
+}
+
+function statusLabel(status) {
+  if (!status) return "-";
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function csvEscape(value) {
+  const str = value === null || value === undefined ? "" : String(value);
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function downloadCSV(filename, headers, rows) {
+  const lines = [headers, ...rows].map((row) => row.map(csvEscape).join(","));
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function StatCard({ icon: Icon, label, value, subtext }) {
+  return (
+    <Card className="h-full">
+      <CardContent className="p-3 sm:p-4">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground sm:text-xs">
+            {label}
+          </p>
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+          </div>
+        </div>
+        <p className="mt-2 font-heading text-xl font-semibold text-foreground sm:text-2xl">{value}</p>
+        {subtext && <p className="mt-0.5 truncate text-[11px] text-muted-foreground sm:text-xs">{subtext}</p>}
+      </CardContent>
+    </Card>
+  );
+}
 
 function AttendanceContent() {
   const { user } = useAuth();
@@ -59,13 +131,86 @@ function AttendanceContent() {
       .finally(() => setMonthLoading(false));
   }, [isAdminView, viewMode, selectedYear, selectedMonth]);
 
-  const groupedByEmployee = monthRecords.reduce((acc, rec) => {
-    if (!acc[rec.employeeUid]) {
-      acc[rec.employeeUid] = { employeeName: rec.employeeName, department: rec.department, days: [] };
-    }
-    acc[rec.employeeUid].days.push(rec);
-    return acc;
-  }, {});
+  // Sorted by name so the table (and the CSV export, which reuses this
+  // order) reads consistently instead of following whatever order
+  // Firestore happened to return docs in.
+  const sortedRecords = useMemo(
+    () => records.slice().sort((a, b) => (a.employeeName || "").localeCompare(b.employeeName || "")),
+    [records]
+  );
+
+  const todaySummary = useMemo(() => {
+    const present = records.filter((r) => PRESENT_STATUSES.includes(r.status)).length;
+    const onLeave = records.filter((r) => LEAVE_STATUSES.includes(r.status)).length;
+    const stillWorking = records.filter((r) => r.checkInTime && !r.checkOutTime).length;
+    return { total: records.length, present, onLeave, stillWorking };
+  }, [records]);
+
+  const groupedByEmployee = useMemo(() => {
+    const groups = {};
+    monthRecords.forEach((rec) => {
+      if (!groups[rec.employeeUid]) {
+        groups[rec.employeeUid] = { employeeName: rec.employeeName, department: rec.department, days: [] };
+      }
+      groups[rec.employeeUid].days.push(rec);
+    });
+    Object.values(groups).forEach((emp) => {
+      emp.days.sort((a, b) => a.date.localeCompare(b.date));
+      const presentDays = emp.days.filter((d) => PRESENT_STATUSES.includes(d.status)).length;
+      const leaveDays = emp.days.filter((d) => LEAVE_STATUSES.includes(d.status)).length;
+      const workingDurations = emp.days.filter((d) => d.totalWorkingMs > 0).map((d) => d.totalWorkingMs);
+      emp.presentDays = presentDays;
+      emp.leaveDays = leaveDays;
+      emp.avgWorkingMs = workingDurations.length
+        ? workingDurations.reduce((a, b) => a + b, 0) / workingDurations.length
+        : 0;
+    });
+    return Object.entries(groups).sort(([, a], [, b]) => (a.employeeName || "").localeCompare(b.employeeName || ""));
+  }, [monthRecords]);
+
+  const monthSummary = useMemo(() => {
+    const employeesTracked = groupedByEmployee.length;
+    const presentMarkings = monthRecords.filter((r) => PRESENT_STATUSES.includes(r.status)).length;
+    const leaveMarkings = monthRecords.filter((r) => LEAVE_STATUSES.includes(r.status)).length;
+    const workingDurations = monthRecords.filter((r) => r.totalWorkingMs > 0).map((r) => r.totalWorkingMs);
+    const avgWorkingMs = workingDurations.length
+      ? workingDurations.reduce((a, b) => a + b, 0) / workingDurations.length
+      : 0;
+    return { employeesTracked, presentMarkings, leaveMarkings, avgWorkingMs };
+  }, [monthRecords, groupedByEmployee]);
+
+  function exportToday() {
+    const headers = ["Employee", "Department", "Status", "Check In", "Check Out", "Break", "Working Hours"];
+    const rows = sortedRecords.map((rec) => [
+      rec.employeeName || "",
+      rec.department || "",
+      statusLabel(rec.status),
+      formatTime(rec.checkInTime),
+      formatTime(rec.checkOutTime),
+      formatDuration(getTotalBreakMs(rec)),
+      formatDuration(rec.totalWorkingMs),
+    ]);
+    downloadCSV(`attendance-${now.toISOString().split("T")[0]}.csv`, headers, rows);
+  }
+
+  function exportMonth() {
+    const headers = ["Employee", "Department", "Date", "Status", "Check In", "Check Out", "Break", "Working Hours"];
+    const rows = groupedByEmployee.flatMap(([, emp]) =>
+      emp.days.map((rec) => [
+        emp.employeeName || "",
+        emp.department || "",
+        rec.date,
+        statusLabel(rec.status),
+        formatTime(rec.checkInTime),
+        formatTime(rec.checkOutTime),
+        formatDuration(getTotalBreakMs(rec)),
+        formatDuration(rec.totalWorkingMs),
+      ])
+    );
+    downloadCSV(`attendance-${MONTH_NAMES[selectedMonth - 1]}-${selectedYear}.csv`, headers, rows);
+  }
+
+  const hasExportableData = viewMode === "today" ? sortedRecords.length > 0 : groupedByEmployee.length > 0;
 
   return (
     <AppShell>
@@ -79,170 +224,231 @@ function AttendanceContent() {
 
       {isAdminView && (
         <>
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto">
-              <Button
-                size="sm"
-                variant={viewMode === "today" ? "default" : "secondary"}
-                onClick={() => setViewMode("today")}
-              >
-                Today
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === "month" ? "default" : "secondary"}
-                onClick={() => setViewMode("month")}
-              >
-                Monthly View
-              </Button>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto">
+                <Button
+                  size="sm"
+                  variant={viewMode === "today" ? "default" : "secondary"}
+                  onClick={() => setViewMode("today")}
+                >
+                  Today
+                </Button>
+                <Button
+                  size="sm"
+                  variant={viewMode === "month" ? "default" : "secondary"}
+                  onClick={() => setViewMode("month")}
+                >
+                  Monthly View
+                </Button>
+              </div>
+
+              {viewMode === "month" && (
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+                  <Select
+                    value={String(selectedMonth)}
+                    onValueChange={(v) => setSelectedMonth(Number(v))}
+                  >
+                    <SelectTrigger className="w-full sm:w-36"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTH_NAMES.map((name, idx) => (
+                        <SelectItem key={idx} value={String(idx + 1)}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={String(selectedYear)}
+                    onValueChange={(v) => setSelectedYear(Number(v))}
+                  >
+                    <SelectTrigger className="w-full sm:w-24"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[now.getFullYear(), now.getFullYear() - 1].map((y) => (
+                        <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
-            {viewMode === "month" && (
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
-                <Select
-                  value={String(selectedMonth)}
-                  onValueChange={(v) => setSelectedMonth(Number(v))}
-                >
-                  <SelectTrigger className="w-full sm:w-36"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {MONTH_NAMES.map((name, idx) => (
-                      <SelectItem key={idx} value={String(idx + 1)}>{name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={String(selectedYear)}
-                  onValueChange={(v) => setSelectedYear(Number(v))}
-                >
-                  <SelectTrigger className="w-full sm:w-24"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {[now.getFullYear(), now.getFullYear() - 1].map((y) => (
-                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!hasExportableData}
+              onClick={viewMode === "today" ? exportToday : exportMonth}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export CSV
+            </Button>
           </div>
 
           {viewMode === "today" ? (
             <>
+              <div className="mb-4 grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
+                <StatCard icon={Users} label="Marked Today" value={loading ? "-" : todaySummary.total} />
+                <StatCard
+                  icon={CheckCircle2}
+                  label="Present"
+                  value={loading ? "-" : todaySummary.present}
+                  subtext={loading ? undefined : `${todaySummary.stillWorking} still checked in`}
+                />
+                <StatCard icon={CalendarX} label="On Leave" value={loading ? "-" : todaySummary.onLeave} />
+                <StatCard
+                  icon={Clock}
+                  label="Not Checked Out"
+                  value={loading ? "-" : todaySummary.stillWorking}
+                />
+              </div>
+
               <h3 className="mb-3 text-base font-medium text-slate-900 sm:text-lg">
-                Today's Attendance — All Employees
+                Today's Attendance - All Employees
               </h3>
               {loading ? (
                 <p className="text-sm text-slate-500">Loading...</p>
-              ) : records.length === 0 ? (
+              ) : sortedRecords.length === 0 ? (
                 <p className="text-sm text-slate-500">No one has checked in today yet.</p>
               ) : (
-                <div className="grid gap-3">
-                  {records.map((rec) => (
-                    <Card key={rec.id}>
-                      <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="font-medium text-slate-900">{rec.employeeName}</p>
-                          <p className="text-xs text-slate-500">{rec.department}</p>
-                        </div>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:flex sm:flex-wrap sm:items-center sm:gap-x-6 sm:gap-y-1 sm:text-sm">
-                          <span>
-                            In:{" "}
-                            {new Date(rec.checkInTime).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          <span>
-                            Out:{" "}
-                            {rec.checkOutTime
-                              ? new Date(rec.checkOutTime).toLocaleTimeString([], {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })
-                              : "—"}
-                          </span>
-                          <span>Break: {formatDuration(getTotalBreakMs(rec))}</span>
-                          <span>Working: {formatDuration(rec.totalWorkingMs)}</span>
-                          <span className="col-span-2 sm:col-span-1">
-                            <StatusBadge status={rec.status} />
-                          </span>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                <Card>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Department</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>In</TableHead>
+                          <TableHead>Out</TableHead>
+                          <TableHead>Break</TableHead>
+                          <TableHead>Working</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {sortedRecords.map((rec) => (
+                          <TableRow key={rec.id}>
+                            <TableCell className="font-medium text-foreground">{rec.employeeName}</TableCell>
+                            <TableCell className="text-muted-foreground">{rec.department}</TableCell>
+                            <TableCell><StatusBadge status={rec.status} /></TableCell>
+                            <TableCell>{formatTime(rec.checkInTime)}</TableCell>
+                            <TableCell>{formatTime(rec.checkOutTime)}</TableCell>
+                            <TableCell>{formatDuration(getTotalBreakMs(rec))}</TableCell>
+                            <TableCell>{formatDuration(rec.totalWorkingMs)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
               )}
             </>
           ) : (
             <>
+              <div className="mb-4 grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
+                <StatCard
+                  icon={Users}
+                  label="Employees Tracked"
+                  value={monthLoading ? "-" : monthSummary.employeesTracked}
+                />
+                <StatCard
+                  icon={CheckCircle2}
+                  label="Present Markings"
+                  value={monthLoading ? "-" : monthSummary.presentMarkings}
+                />
+                <StatCard
+                  icon={CalendarX}
+                  label="Leave Markings"
+                  value={monthLoading ? "-" : monthSummary.leaveMarkings}
+                />
+                <StatCard
+                  icon={Clock}
+                  label="Avg Working Hours"
+                  value={monthLoading ? "-" : formatDuration(monthSummary.avgWorkingMs)}
+                  subtext="per day worked"
+                />
+              </div>
+
               <h3 className="mb-3 text-base font-medium text-slate-900 sm:text-lg">
-                {MONTH_NAMES[selectedMonth - 1]} {selectedYear} — All Employees
+                {MONTH_NAMES[selectedMonth - 1]} {selectedYear} - All Employees
               </h3>
               {monthLoading ? (
                 <p className="text-sm text-slate-500">Loading...</p>
-              ) : Object.keys(groupedByEmployee).length === 0 ? (
+              ) : groupedByEmployee.length === 0 ? (
                 <p className="text-sm text-slate-500">No attendance records for this month.</p>
               ) : (
-                <div className="grid gap-3">
-                  {Object.entries(groupedByEmployee).map(([uid, emp]) => (
-                    <Card key={uid}>
-                      <CardContent className="p-4">
-                        <button
-                          className="flex w-full items-center justify-between gap-3 text-left"
-                          onClick={() => setExpandedEmployee(expandedEmployee === uid ? null : uid)}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-slate-900">{emp.employeeName}</p>
-                            <p className="truncate text-xs text-slate-500">{emp.department}</p>
-                          </div>
-                          <span className="shrink-0 text-xs text-slate-500">
-                            {emp.days.length} day(s) {expandedEmployee === uid ? "▲" : "▼"}
-                          </span>
-                        </button>
-
-                        {expandedEmployee === uid && (
-                          <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3">
-                            {emp.days
-                              .slice()
-                              .sort((a, b) => a.date.localeCompare(b.date))
-                              .map((rec) => (
-                                <div
-                                  key={rec.id}
-                                  className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-b border-slate-50 pb-2 text-xs last:border-0 last:pb-0 sm:flex sm:flex-wrap sm:items-center sm:gap-x-6 sm:gap-y-1 sm:border-0 sm:pb-0 sm:text-sm"
-                                >
-                                  <span className="col-span-2 font-medium text-slate-700 sm:col-span-1">
-                                    {rec.date}
+                <Card>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Department</TableHead>
+                          <TableHead>Present Days</TableHead>
+                          <TableHead>Leave Days</TableHead>
+                          <TableHead>Avg Working</TableHead>
+                          <TableHead className="text-right">Daily Log</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {groupedByEmployee.map(([uid, emp]) => {
+                          const isExpanded = expandedEmployee === uid;
+                          return (
+                            <Fragment key={uid}>
+                              <TableRow
+                                className="cursor-pointer"
+                                onClick={() => setExpandedEmployee(isExpanded ? null : uid)}
+                              >
+                                <TableCell className="font-medium text-foreground">{emp.employeeName}</TableCell>
+                                <TableCell className="text-muted-foreground">{emp.department}</TableCell>
+                                <TableCell>{emp.presentDays}</TableCell>
+                                <TableCell>{emp.leaveDays}</TableCell>
+                                <TableCell>{formatDuration(emp.avgWorkingMs)}</TableCell>
+                                <TableCell className="text-right">
+                                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                                    {emp.days.length} day{emp.days.length !== 1 ? "s" : ""}
+                                    {isExpanded ? (
+                                      <ChevronUp className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <ChevronDown className="h-3.5 w-3.5" />
+                                    )}
                                   </span>
-                                  <span>
-                                    In:{" "}
-                                    {rec.checkInTime
-                                      ? new Date(rec.checkInTime).toLocaleTimeString([], {
-                                          hour: "2-digit",
-                                          minute: "2-digit",
-                                        })
-                                      : "—"}
-                                  </span>
-                                  <span>
-                                    Out:{" "}
-                                    {rec.checkOutTime
-                                      ? new Date(rec.checkOutTime).toLocaleTimeString([], {
-                                          hour: "2-digit",
-                                          minute: "2-digit",
-                                        })
-                                      : "—"}
-                                  </span>
-                                  <span>Break: {formatDuration(getTotalBreakMs(rec))}</span>
-                                  <span>Working: {formatDuration(rec.totalWorkingMs)}</span>
-                                  <span className="col-span-2 sm:col-span-1">
-                                    <StatusBadge status={rec.status} />
-                                  </span>
-                                </div>
-                              ))}
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                                </TableCell>
+                              </TableRow>
+                              {isExpanded && (
+                                <TableRow className="hover:bg-transparent">
+                                  <TableCell colSpan={6} className="bg-muted/30 p-0">
+                                    <Table>
+                                      <TableHeader>
+                                        <TableRow>
+                                          <TableHead>Date</TableHead>
+                                          <TableHead>Status</TableHead>
+                                          <TableHead>In</TableHead>
+                                          <TableHead>Out</TableHead>
+                                          <TableHead>Break</TableHead>
+                                          <TableHead>Working</TableHead>
+                                        </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                        {emp.days.map((rec) => (
+                                          <TableRow key={rec.id}>
+                                            <TableCell className="font-medium text-foreground">{rec.date}</TableCell>
+                                            <TableCell><StatusBadge status={rec.status} /></TableCell>
+                                            <TableCell>{formatTime(rec.checkInTime)}</TableCell>
+                                            <TableCell>{formatTime(rec.checkOutTime)}</TableCell>
+                                            <TableCell>{formatDuration(getTotalBreakMs(rec))}</TableCell>
+                                            <TableCell>{formatDuration(rec.totalWorkingMs)}</TableCell>
+                                          </TableRow>
+                                        ))}
+                                      </TableBody>
+                                    </Table>
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
               )}
             </>
           )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, Suspense } from "react";
+import { useEffect, useMemo, useState, Suspense, Fragment } from "react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -55,7 +55,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import StatusBadge from "@/components/ui/status-badge";
+import { cn } from "@/lib/utils";
 import {
   BarChart3,
   Layers,
@@ -67,6 +67,9 @@ import {
   AlertTriangle,
   MessageSquare,
   FileText,
+  ClipboardList,
+  History,
+  CheckCircle2,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
@@ -98,6 +101,32 @@ function getFinancialYearOptions() {
 function fmtDate(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/**
+ * Section header used across the employee's Post-Production page —
+ * small icon tile + title + optional count chip + description, so each
+ * block (deliverables / storage log / storage history) reads as a
+ * distinct, labeled area rather than a bare all-caps line floating on
+ * the page background.
+ */
+function SectionHeader({ icon: Icon, title, description, count }) {
+  return (
+    <div className="mb-3 flex items-start gap-2.5">
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+          {typeof count === "number" && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">{count}</span>
+          )}
+        </div>
+        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
+      </div>
+    </div>
+  );
 }
 
 /* ---------------------------------------------------------------------- */
@@ -333,44 +362,121 @@ function EmployeeDeliverableDialog({ open, onOpenChange, deliverable, onSaved })
 }
 
 /**
+ * Small pill summarizing a saved storage entry — a "logged" chip plus the
+ * main/backup drive names as compact mono tags. Used wherever a resolved
+ * entry needs a compact, scannable summary instead of a plain text link.
+ */
+function StorageStatusPill({ entry }) {
+  if (!entry) return null;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+        <CheckCircle2 className="h-3 w-3" /> Logged
+      </span>
+      <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+        {entry.mainStorage}
+      </span>
+      {entry.backupStorage && (
+        <span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          + {entry.backupStorage}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
  * Employee's own "log storage" list — one row per event they're on,
  * showing whether they've already logged their storage handoff for it,
  * with a button to log it if not. Unlike the admin StorageEventList,
  * this only ever shows the current employee's own row per event, since
  * that's the only entry firestore.rules lets them create/edit.
  */
-function MyStorageLogList({ events, user, entriesByKey, onLogStorage, onViewStorage }) {
-  if (events.length === 0) {
-    return <p className="text-sm text-muted-foreground">You&apos;re not assigned to any events yet.</p>;
+function MyStorageLogList({ events, user, entriesByKey, onLogStorage }) {
+  // Once an event's storage is logged, it drops out of this list entirely
+  // — it lives in Storage history from then on. This list is only ever
+  // the "still needs action" queue, not a mixed logged/unlogged view.
+  const pending = events.filter((ev) => !entriesByKey.has(`${ev.id}_${user.uid}`));
+
+  if (pending.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+        {events.length === 0
+          ? "You're not assigned to any events yet."
+          : "You're all caught up — every event you're on has storage logged."}
+      </div>
+    );
   }
   return (
-    <div className="flex flex-col gap-2">
-      {events.map((ev) => {
+    <div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
+      {pending.map((ev) => {
         const me = (ev.team || []).find((m) => m.uid === user.uid) || { uid: user.uid, name: user.name, role: "" };
-        const entry = entriesByKey.get(`${ev.id}_${user.uid}`);
         const day = ev.eventStartDate ? fmtDate(ev.eventStartDate) : "—";
         return (
-          <div key={ev.id} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-            <div>
-              <p className="text-sm font-medium text-foreground">{ev.eventName}</p>
-              <p className="text-xs text-muted-foreground">{ev.projectName}{ev.clientName ? ` · ${ev.clientName}` : ""} · {day}</p>
+          <div
+            key={ev.id}
+            className="flex flex-col gap-2.5 bg-background px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <HardDrive className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-foreground">{ev.eventName}</p>
+                <p className="truncate text-xs text-muted-foreground">{ev.projectName}{ev.clientName ? ` · ${ev.clientName}` : ""} · {day}</p>
+              </div>
             </div>
-            {entry ? (
-              <button
-                type="button"
-                className="text-xs text-emerald-700 underline-offset-2 hover:underline"
-                onClick={() => onViewStorage(ev, me, entry)}
-              >
-                {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""}
-              </button>
-            ) : (
-              <Button size="sm" variant="secondary" onClick={() => onLogStorage(ev, me)}>
-                + Log Storage
-              </Button>
-            )}
+            <Button size="sm" variant="secondary" className="w-full shrink-0 sm:w-auto" onClick={() => onLogStorage(ev, me)}>
+              <Plus className="h-3.5 w-3.5" /> Log Storage
+            </Button>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Chronological "everything I've ever logged" list for an employee —
+ * independent of MyStorageLogList above, which only shows entries for
+ * events they're *currently* assigned to. This reads straight from
+ * getStorageEntriesForEmployee(uid), so an entry still shows up here
+ * even if they're later removed from that event's team.
+ */
+function StorageHistoryList({ entries, onView }) {
+  if (entries.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+        You haven&apos;t logged any storage entries yet.
+      </div>
+    );
+  }
+  const sorted = [...entries].sort((a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt));
+  return (
+    <div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
+      {sorted.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          onClick={() => onView(entry)}
+          className="flex flex-col gap-2 bg-background px-3.5 py-3 text-left transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+              <History className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-foreground">{entry.eventName || "—"}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {entry.projectName}{entry.clientName ? ` · ${entry.clientName}` : ""} · {fmtDate(entry.date)}
+              </p>
+            </div>
+          </div>
+          <span className="self-start sm:self-auto sm:shrink-0">
+            <StorageStatusPill entry={entry} />
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -629,23 +735,26 @@ function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage })
                   {team.map((m) => {
                     const entry = entriesByKey.get(`${ev.id}_${m.uid}`);
                     return (
-                      <div key={m.uid} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <AvatarInitials name={m.name} size="sm" className="h-6 w-6 text-[10px]" />
-                          <span className="text-sm text-foreground">{m.name}</span>
-                          <span className="text-xs text-muted-foreground">{m.role}</span>
-                          {!entry && <span className="text-xs text-rose-600">— not received yet</span>}
+                      <div
+                        key={m.uid}
+                        className="flex flex-col gap-2 rounded-md border border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <AvatarInitials name={m.name} size="sm" className="h-6 w-6 shrink-0 text-[10px]" />
+                          <span className="truncate text-sm text-foreground">{m.name}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{m.role}</span>
+                          {!entry && <span className="shrink-0 text-xs text-rose-600">— not received yet</span>}
                         </div>
                         {entry ? (
                           <button
                             type="button"
-                            className="text-xs text-emerald-700 underline-offset-2 hover:underline"
+                            className="self-start truncate text-xs text-emerald-700 underline-offset-2 hover:underline sm:self-auto sm:shrink-0"
                             onClick={() => onViewStorage(ev, m, entry)}
                           >
                             {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""}
                           </button>
                         ) : (
-                          <Button size="sm" variant="secondary" onClick={() => onLogStorage(ev, m)}>
+                          <Button size="sm" variant="secondary" className="w-full sm:w-auto" onClick={() => onLogStorage(ev, m)}>
                             + Log Storage
                           </Button>
                         )}
@@ -666,72 +775,418 @@ function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage })
 /* Deliverables table (per project)                                        */
 /* ---------------------------------------------------------------------- */
 
-function DeliverablesTable({ deliverables, isAdminView, onEdit, onDelete, showProject = false, rowsClickable = isAdminView }) {
-  const pending = deliverables.filter((d) => d.status === "Pending");
-  const inProgress = deliverables.filter((d) => d.status === "In Progress");
-  const done = deliverables.filter((d) => d.status === "Done");
-  const ordered = [...pending, ...inProgress, ...done];
+const STATUS_GROUP_STYLES = {
+  Pending: "bg-amber-50 text-amber-700",
+  "In Progress": "bg-blue-50 text-blue-700",
+  Done: "bg-emerald-50 text-emerald-700",
+};
+
+const STATUS_DOT_STYLES = {
+  Pending: "bg-amber-500",
+  "In Progress": "bg-blue-500",
+  Done: "bg-emerald-500",
+};
+
+function personLabel(uid, people) {
+  if (!uid) return "Unassigned";
+  const p = people.find((p) => p.uid === uid);
+  return p ? `${p.name}${p.isFreelancer ? " (Freelancer)" : ""}` : "Unassigned";
+}
+
+/**
+ * Assignee dropdown shared by the desktop table and mobile cards. Renders
+ * the matched person's name via SelectValue's render-prop — the base-ui
+ * Select otherwise falls back to printing the raw option `value` (the
+ * uid) once selected, which is what showed ids like "8TVKTbnQGNaJ"
+ * instead of a name.
+ */
+function AssigneeSelect({ value, people, onChange, className }) {
+  return (
+    <Select
+      value={value || "none"}
+      onValueChange={(v) => {
+        const person = people.find((p) => p.uid === v);
+        onChange({
+          assignedUid: v === "none" ? null : v,
+          assignedName: v === "none" ? null : person?.name || null,
+        });
+      }}
+    >
+      <SelectTrigger className={cn("h-8 text-sm", className)}>
+        <SelectValue placeholder="Unassigned">
+          {(v) => (v === "none" || !v ? "Unassigned" : personLabel(v, people))}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="none">Unassigned</SelectItem>
+        {people.map((p) => (
+          <SelectItem key={p.uid} value={p.uid}>
+            {p.name}{p.isFreelancer ? " (Freelancer)" : ""}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * Inline date input — plain text when not editable, a real <input
+ * type="date"> (click-anywhere-on-the-box, not just the calendar icon)
+ * when it is. Stops propagation so it never triggers a parent row's
+ * onClick (see the sticky-header/date-picker click issue from the
+ * earlier session — keeping this self-contained avoids that class of
+ * bug entirely rather than depending on z-index tuning).
+ */
+function InlineDateCell({ value, onChange, editable }) {
+  if (!editable) {
+    return <TableCell className="text-muted-foreground">{fmtDate(value)}</TableCell>;
+  }
+  return (
+    <TableCell onClick={(e) => e.stopPropagation()}>
+      <Input
+        type="date"
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="h-8 w-[9.5rem] text-sm"
+      />
+    </TableCell>
+  );
+}
+
+/* --- Mobile card (one per deliverable, used below the md breakpoint) --- */
+function DeliverableCard({ d, isAdminView, onEdit, onDelete, onInlineUpdate, people, showProject, clickable }) {
+  const canEditInline = isAdminView && !!onInlineUpdate;
+  const [showUpdates, setShowUpdates] = useState(false);
+  const updates = (d.updates || []).length
+    ? [...d.updates].sort((a, b) => new Date(b.at) - new Date(a.at))
+    : [];
 
   return (
-    <Card>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {showProject && <TableHead>Project</TableHead>}
-            <TableHead>Deliverable</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Assigned To</TableHead>
-            <TableHead>Start</TableHead>
-            <TableHead>End</TableHead>
-            <TableHead>Deadline</TableHead>
-            {isAdminView && <TableHead className="text-right">Actions</TableHead>}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {ordered.map((d) => (
-            <TableRow key={d.id} className={rowsClickable ? "cursor-pointer" : ""} onClick={() => rowsClickable && onEdit(d)}>
-              {showProject && (
-                <TableCell className="text-muted-foreground">{d.projectName || "—"}</TableCell>
-              )}
-              <TableCell className="font-medium text-foreground">
-                <div className="flex items-center gap-1.5">
-                  {d.type}
-                  {d.instructions && (
-                    <span title="Has instructions for assignee">
-                      <FileText className="h-3 w-3 text-amber-600" />
-                    </span>
-                  )}
-                  {(d.updates || []).length > 0 && (
-                    <span className="inline-flex items-center gap-0.5 text-xs font-normal text-muted-foreground">
-                      <MessageSquare className="h-3 w-3" />
-                      {d.updates.length}
-                    </span>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell><StatusBadge status={d.status === "Done" ? "Completed" : d.status}>{d.status}</StatusBadge></TableCell>
-              <TableCell className="text-muted-foreground">{d.assignedName || "Unassigned"}</TableCell>
-              <TableCell className="text-muted-foreground">{fmtDate(d.startDate)}</TableCell>
-              <TableCell className="text-muted-foreground">{fmtDate(d.endDate)}</TableCell>
-              <TableCell className="text-muted-foreground">{fmtDate(d.deadline)}</TableCell>
-              {isAdminView && (
-                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex justify-end gap-1">
-                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onEdit(d)}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => onDelete(d)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </TableCell>
-              )}
-            </TableRow>
+    <div
+      className={`rounded-lg border border-border bg-background p-3 ${clickable ? "cursor-pointer" : ""}`}
+      onClick={() => clickable && onEdit(d)}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          {showProject && d.projectName && (
+            <p className="truncate text-xs text-muted-foreground">{d.projectName}</p>
+          )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT_STYLES[d.status] || "bg-muted-foreground"}`} />
+            <p className="font-medium text-foreground">{d.type}</p>
+            {d.instructions && (
+              <span title="Has instructions for assignee">
+                <FileText className="h-3 w-3 shrink-0 text-amber-600" />
+              </span>
+            )}
+            {updates.length > 0 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowUpdates((v) => !v);
+                }}
+                className="inline-flex items-center gap-0.5 text-xs font-normal text-muted-foreground hover:text-accent"
+              >
+                <MessageSquare className="h-3 w-3" />
+                {updates.length}
+              </button>
+            )}
+          </div>
+        </div>
+        {isAdminView && (
+          <div className="flex shrink-0 gap-1" onClick={(e) => e.stopPropagation()}>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onEdit(d)}>
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => onDelete(d)}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {showUpdates && updates.length > 0 && (
+        <div
+          className="mt-2 flex flex-col gap-1.5 border-l-2 border-border bg-muted/40 p-2 pl-2.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {updates.map((u, i) => (
+            <div key={i} className="text-xs">
+              <span className="font-medium text-foreground">{u.byName || "Someone"}</span>
+              <span className="text-muted-foreground"> · {fmtDate(u.at)}{u.status ? ` · moved to ${u.status}` : ""}</span>
+              <p className="text-muted-foreground">{u.text}</p>
+            </div>
           ))}
-        </TableBody>
-      </Table>
-    </Card>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-col gap-2.5" onClick={(e) => e.stopPropagation()}>
+        <div>
+          <p className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Assigned To</p>
+          {canEditInline ? (
+            <AssigneeSelect
+              value={d.assignedUid}
+              people={people}
+              onChange={(patch) => onInlineUpdate(d, patch)}
+              className="w-full"
+            />
+          ) : (
+            <p className="text-sm text-foreground">{d.assignedName || "Unassigned"}</p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            ["Start", "startDate"],
+            ["End", "endDate"],
+            ["Deadline", "deadline"],
+          ].map(([label, key]) => (
+            <div key={key}>
+              <p className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+              {canEditInline ? (
+                <Input
+                  type="date"
+                  value={d[key] || ""}
+                  onChange={(e) => onInlineUpdate(d, { [key]: e.target.value || null })}
+                  className="h-8 w-full px-1.5 text-xs"
+                />
+              ) : (
+                <p className="text-xs text-foreground">{fmtDate(d[key])}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
+}
+
+function DeliverablesTable({
+  deliverables,
+  isAdminView,
+  onEdit,
+  onDelete,
+  onInlineUpdate,
+  people = [],
+  showProject = false,
+  rowsClickable = false,
+}) {
+  const grouped = DELIVERABLE_STATUSES.map((status) => ({
+    status,
+    rows: deliverables.filter((d) => d.status === status),
+  })).filter((g) => g.rows.length > 0);
+
+  const [expandedRows, setExpandedRows] = useState(() => new Set());
+  function toggleExpanded(id) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  if (deliverables.length === 0) {
+    return (
+      <Card>
+        <div className="p-6 text-center text-sm text-muted-foreground">No deliverables yet.</div>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      {/* Mobile: stacked cards grouped by status. Tables don't reflow well
+          on narrow screens — six columns of dates/selects just get
+          crushed — so below md we swap to a card-per-deliverable layout
+          instead of forcing horizontal scroll. */}
+      <div className="flex flex-col gap-4 md:hidden">
+        {grouped.map((group) => (
+          <div key={group.status} className="flex flex-col gap-2">
+            <p className={`rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${STATUS_GROUP_STYLES[group.status] || "bg-muted text-muted-foreground"}`}>
+              {group.status} ({group.rows.length})
+            </p>
+            {group.rows.map((d) => (
+              <DeliverableCard
+                key={d.id}
+                d={d}
+                isAdminView={isAdminView}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onInlineUpdate={onInlineUpdate}
+                people={people}
+                showProject={showProject}
+                clickable={rowsClickable}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop / tablet: full table. */}
+      <Card className="hidden overflow-x-auto md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {showProject && <TableHead>Project</TableHead>}
+              <TableHead>Deliverable</TableHead>
+              <TableHead>Assigned To</TableHead>
+              <TableHead>Start</TableHead>
+              <TableHead>End</TableHead>
+              <TableHead>Deadline</TableHead>
+              {isAdminView && <TableHead className="text-right">Actions</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {grouped.map((group) => (
+              <Fragment key={group.status}>
+                <TableRow className="hover:bg-transparent">
+                  <TableCell
+                    colSpan={
+                      (showProject ? 1 : 0) + 4 + (isAdminView ? 1 : 0)
+                    }
+                    className={`py-1.5 text-xs font-semibold uppercase tracking-wide ${STATUS_GROUP_STYLES[group.status] || "bg-muted text-muted-foreground"}`}
+                  >
+                    {group.status} ({group.rows.length})
+                  </TableCell>
+                </TableRow>
+                {group.rows.map((d) => {
+                  const canEditInline = isAdminView && !!onInlineUpdate;
+                  const updates = (d.updates || []).length
+                    ? [...d.updates].sort((a, b) => new Date(b.at) - new Date(a.at))
+                    : [];
+                  const isExpanded = expandedRows.has(d.id);
+                  return (
+                    <Fragment key={d.id}>
+                    <TableRow
+                      className={rowsClickable ? "cursor-pointer" : ""}
+                      onClick={() => rowsClickable && onEdit(d)}
+                    >
+                      {showProject && (
+                        <TableCell className="text-muted-foreground">{d.projectName || "—"}</TableCell>
+                      )}
+                      <TableCell className="font-medium text-foreground">
+                        <div className="flex items-center gap-1.5">
+                          {d.type}
+                          {d.instructions && (
+                            <span title="Has instructions for assignee">
+                              <FileText className="h-3 w-3 text-amber-600" />
+                            </span>
+                          )}
+                          {updates.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExpanded(d.id);
+                              }}
+                              className="inline-flex items-center gap-0.5 text-xs font-normal text-muted-foreground hover:text-accent"
+                            >
+                              <MessageSquare className="h-3 w-3" />
+                              {updates.length}
+                            </button>
+                          )}
+                        </div>
+                      </TableCell>
+                      {canEditInline ? (
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <AssigneeSelect
+                            value={d.assignedUid}
+                            people={people}
+                            onChange={(patch) => onInlineUpdate(d, patch)}
+                            className="w-[9.5rem]"
+                          />
+                        </TableCell>
+                      ) : (
+                        <TableCell className="text-muted-foreground">{d.assignedName || "Unassigned"}</TableCell>
+                      )}
+                      <InlineDateCell
+                        value={d.startDate}
+                        editable={canEditInline}
+                        onChange={(v) => onInlineUpdate(d, { startDate: v })}
+                      />
+                      <InlineDateCell
+                        value={d.endDate}
+                        editable={canEditInline}
+                        onChange={(v) => onInlineUpdate(d, { endDate: v })}
+                      />
+                      <InlineDateCell
+                        value={d.deadline}
+                        editable={canEditInline}
+                        onChange={(v) => onInlineUpdate(d, { deadline: v })}
+                      />
+                      {isAdminView && (
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex justify-end gap-1">
+                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onEdit(d)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => onDelete(d)}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                    {isExpanded && updates.length > 0 && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell
+                          colSpan={(showProject ? 1 : 0) + 4 + (isAdminView ? 1 : 0)}
+                          className="bg-muted/40"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex flex-col gap-1.5 border-l-2 border-border py-1 pl-2.5">
+                            {updates.map((u, i) => (
+                              <div key={i} className="text-xs">
+                                <span className="font-medium text-foreground">{u.byName || "Someone"}</span>
+                                <span className="text-muted-foreground"> · {fmtDate(u.at)}{u.status ? ` · moved to ${u.status}` : ""}</span>
+                                <p className="text-muted-foreground">{u.text}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </>
+  );
+}
+
+/**
+ * Combines the events an employee is on (team-based, via
+ * getEventsForEmployee) with events belonging to any project where they
+ * have a deliverable assigned — even if they were never added to that
+ * event's team. The latter is what lets an editor/album-designer log
+ * storage for a project's events, matching the
+ * isDeliverableAssigneeOfProject() firestore.rules allowance. Falls back
+ * to [] per-project on a permission error so one stale/misconfigured
+ * project doesn't block the rest of the list from loading.
+ */
+async function getMyEventsIncludingDeliverableProjects(uid, teamEvents, deliverables) {
+  const teamProjectIds = new Set((teamEvents || []).map((e) => e.projectId));
+  const extraProjectIds = Array.from(
+    new Set((deliverables || []).map((d) => d.projectId).filter((id) => id && !teamProjectIds.has(id)))
+  );
+  if (extraProjectIds.length === 0) return teamEvents || [];
+
+  const extraEventLists = await Promise.all(
+    extraProjectIds.map((projectId) =>
+      getEventsForProject(projectId).catch((err) => {
+        console.error(`Failed to load events for project ${projectId}:`, err);
+        return [];
+      })
+    )
+  );
+  const seen = new Set((teamEvents || []).map((e) => e.id));
+  const extraEvents = extraEventLists.flat().filter((e) => !seen.has(e.id));
+  return [...(teamEvents || []), ...extraEvents];
 }
 
 /* ---------------------------------------------------------------------- */
@@ -763,6 +1218,7 @@ function PostProductionContent() {
   const [projectEvents, setProjectEvents] = useState([]);
 
   const [editingDeliverable, setEditingDeliverable] = useState(null);
+  const [expandedUpdateIds, setExpandedUpdateIds] = useState(() => new Set());
   const [editingMyDeliverable, setEditingMyDeliverable] = useState(null);
   const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
   const [storageContext, setStorageContext] = useState(null);
@@ -784,7 +1240,7 @@ function PostProductionContent() {
         ]);
         setMyDeliverables(mine || []);
         setMyStorageEntries(myStorage || []);
-        setMyEvents(evs || []);
+        setMyEvents(await getMyEventsIncludingDeliverableProjects(user.uid, evs, mine));
       } catch (err) {
         console.error("Failed to load your deliverables:", err);
         toast.error(err.message || "Failed to load your deliverables");
@@ -916,6 +1372,20 @@ function PostProductionContent() {
     if (isAdminView) await loadOrgData();
   }
 
+  async function handleInlineDeliverableUpdate(d, patch) {
+    // Optimistic local update so the row doesn't flicker/reset while the
+    // write is in flight, then reconcile with a real reload.
+    setProjectDeliverables((prev) => prev.map((row) => (row.id === d.id ? { ...row, ...patch } : row)));
+    try {
+      await updateDeliverable(d.projectId, d.id, patch);
+      if (isAdminView) loadOrgData();
+    } catch (err) {
+      toast.error(err.message || "Failed to update deliverable");
+      // Roll back on failure.
+      setProjectDeliverables((prev) => prev.map((row) => (row.id === d.id ? d : row)));
+    }
+  }
+
   async function handleDeleteDeliverable(d) {
     if (!confirm(`Remove "${d.type}"?`)) return;
     try {
@@ -943,7 +1413,7 @@ function PostProductionContent() {
         ]);
         setMyDeliverables(mine || []);
         setMyStorageEntries(myStorage || []);
-        setMyEvents(evs || []);
+        setMyEvents(await getMyEventsIncludingDeliverableProjects(user.uid, evs, mine));
       } catch (err) {
         console.error("Failed to reload your data:", err);
       } finally {
@@ -952,44 +1422,105 @@ function PostProductionContent() {
     }
     const myEntriesByKey = new Map();
     myStorageEntries.forEach((entry) => myEntriesByKey.set(`${entry.eventId}_${entry.memberUid}`, entry));
+    const pendingStorageCount = myEvents.filter((ev) => !myEntriesByKey.has(`${ev.id}_${user.uid}`)).length;
 
     return (
       <AppShell>
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Post-Production</h2>
-          <p className="text-sm text-muted-foreground">Tap a deliverable to update its status or add a note.</p>
+        <div className="mb-6 flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+            <ClipboardList className="h-5 w-5" />
+          </span>
+          <div>
+            <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Post-Production</h2>
+            <p className="text-sm text-muted-foreground">Tap a deliverable to update its status or add a note.</p>
+          </div>
         </div>
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : (
-          <div className="flex flex-col gap-8">
-            <div>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Your deliverables</h3>
-              {myDeliverables.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No deliverables assigned to you yet.</p>
-              ) : (
-                <DeliverablesTable
-                  deliverables={myDeliverables}
-                  isAdminView={false}
-                  rowsClickable
-                  onEdit={setEditingMyDeliverable}
-                  onDelete={() => {}}
-                  showProject
+          <div className="flex flex-col gap-4">
+            <Card>
+              <CardContent className="p-4 sm:p-5">
+                <SectionHeader
+                  icon={ClipboardList}
+                  title="Your deliverables"
+                  count={myDeliverables.length}
+                  description="Tap one to update its status or leave a note for the team."
                 />
-              )}
-            </div>
+                {myDeliverables.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+                    No deliverables assigned to you yet.
+                  </div>
+                ) : (
+                  <DeliverablesTable
+                    deliverables={myDeliverables}
+                    isAdminView={false}
+                    rowsClickable
+                    onEdit={setEditingMyDeliverable}
+                    onDelete={() => {}}
+                    showProject
+                  />
+                )}
+              </CardContent>
+            </Card>
 
-            <div>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Your storage log</h3>
-              <p className="mb-3 text-xs text-muted-foreground">One entry per event — log it once your cards/backups are handed off.</p>
-              <MyStorageLogList
-                events={myEvents}
-                user={user}
-                entriesByKey={myEntriesByKey}
-                onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
-                onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
-              />
-            </div>
+            {/* Storage logging is offered to anyone with something to log
+                it against — either a deliverable assigned to them
+                (anywhere), or an event team assignment (myEvents already
+                includes both: team-based events from getEventsForEmployee,
+                plus events from any project they have a deliverable on,
+                merged in getMyEventsIncludingDeliverableProjects). Someone
+                with neither has no event to log storage for, so the whole
+                log + history section stays hidden rather than showing an
+                empty/disabled state. */}
+            {(myDeliverables.length > 0 || myEvents.length > 0 || myStorageEntries.length > 0) && (
+              <>
+                <Card>
+                  <CardContent className="p-4 sm:p-5">
+                    <SectionHeader
+                      icon={HardDrive}
+                      title="Your storage log"
+                      count={pendingStorageCount}
+                      description="Events still waiting on your cards/backups being logged."
+                    />
+                    <MyStorageLogList
+                      events={myEvents}
+                      user={user}
+                      entriesByKey={myEntriesByKey}
+                      onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
+                    />
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="p-4 sm:p-5">
+                    <SectionHeader
+                      icon={History}
+                      title="Storage history"
+                      count={myStorageEntries.length}
+                      description="Everything you've logged, including for events you're no longer assigned to."
+                    />
+                    <StorageHistoryList
+                      entries={myStorageEntries}
+                      onView={(entry) =>
+                        setStorageContext({
+                          event: {
+                            id: entry.eventId,
+                            eventName: entry.eventName,
+                            projectId: entry.projectId,
+                            projectName: entry.projectName,
+                            clientName: entry.clientName,
+                            eventStartDate: entry.date,
+                          },
+                          member: { uid: entry.memberUid, name: entry.memberName, role: entry.memberRole },
+                          existingEntry: entry,
+                        })
+                      }
+                    />
+                  </CardContent>
+                </Card>
+              </>
+            )}
           </div>
         )}
         <EmployeeDeliverableDialog
@@ -1060,25 +1591,90 @@ function PostProductionContent() {
                 {openDeliverables.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No open deliverables. Everything in this period is delivered.</p>
                 ) : (
-                  <div className="max-h-96 overflow-y-auto">
+                  <div className="max-h-96 overflow-x-auto overflow-y-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead>Client</TableHead>
                           <TableHead>Deliverable</TableHead>
                           <TableHead>Assigned To</TableHead>
+                          <TableHead>Message</TableHead>
                           <TableHead>Deadline</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {openDeliverables.map((d) => (
-                          <TableRow key={d.id}>
-                            <TableCell className="text-foreground">{d.clientName || d.projectName}</TableCell>
-                            <TableCell className="text-muted-foreground">{d.type}</TableCell>
-                            <TableCell className={d.assignedName ? "text-foreground" : "text-muted-foreground"}>{d.assignedName || "Unassigned"}</TableCell>
-                            <TableCell className="text-muted-foreground">{fmtDate(d.deadline)}</TableCell>
-                          </TableRow>
-                        ))}
+                        {openDeliverables.map((d) => {
+                          const updates = (d.updates || []).length
+                            ? [...d.updates].sort((a, b) => new Date(b.at) - new Date(a.at))
+                            : [];
+                          const latestUpdate = updates[0] || null;
+                          const extraCount = Math.max(updates.length - 1, 0);
+                          const isExpanded = expandedUpdateIds.has(d.id);
+                          const message = latestUpdate?.text || d.instructions || "";
+                          return (
+                            <TableRow key={d.id}>
+                              <TableCell className="text-foreground">{d.clientName || d.projectName}</TableCell>
+                              <TableCell className="text-muted-foreground">{d.type}</TableCell>
+                              <TableCell className={d.assignedName ? "text-foreground" : "text-muted-foreground"}>{d.assignedName || "Unassigned"}</TableCell>
+                              <TableCell className="max-w-[260px] whitespace-normal break-words text-muted-foreground">
+                                {message ? (
+                                  <div>
+                                    <span className="inline-flex items-start gap-1">
+                                      {latestUpdate ? (
+                                        <MessageSquare className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+                                      ) : (
+                                        <FileText className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
+                                      )}
+                                      <span>
+                                        {latestUpdate?.byName && (
+                                          <span className="font-medium text-foreground">{latestUpdate.byName}: </span>
+                                        )}
+                                        {message}
+                                      </span>
+                                    </span>
+                                    {extraCount > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setExpandedUpdateIds((prev) => {
+                                            const next = new Set(prev);
+                                            next.has(d.id) ? next.delete(d.id) : next.add(d.id);
+                                            return next;
+                                          })
+                                        }
+                                        className="mt-1 block text-xs font-medium text-accent hover:underline"
+                                      >
+                                        {isExpanded ? "Hide earlier updates" : `+${extraCount} more update${extraCount === 1 ? "" : "s"}`}
+                                      </button>
+                                    )}
+                                    {isExpanded && (
+                                      <div className="mt-1.5 flex flex-col gap-1.5 border-l-2 border-border pl-2">
+                                        {updates.slice(1).map((u, i) => (
+                                          <div key={i} className="text-xs">
+                                            <span className="font-medium text-foreground">{u.byName || "Someone"}</span>
+                                            <span className="text-muted-foreground"> · {fmtDate(u.at)}{u.status ? ` · moved to ${u.status}` : ""}</span>
+                                            <p className="text-muted-foreground">{u.text}</p>
+                                          </div>
+                                        ))}
+                                        {d.instructions && (
+                                          <div className="text-xs">
+                                            <span className="inline-flex items-center gap-1 font-medium text-amber-700">
+                                              <FileText className="h-3 w-3" /> Instructions
+                                            </span>
+                                            <p className="text-muted-foreground">{d.instructions}</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  "—"
+                                )}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">{fmtDate(d.deadline)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
@@ -1241,6 +1837,8 @@ function PostProductionContent() {
                       isAdminView={isAdminView}
                       onEdit={setEditingDeliverable}
                       onDelete={handleDeleteDeliverable}
+                      onInlineUpdate={handleInlineDeliverableUpdate}
+                      people={people}
                     />
                   </>
                 ) : (

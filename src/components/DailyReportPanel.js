@@ -9,7 +9,10 @@ import {
     getReportHistoryForEmployee,
 } from "@/lib/firebase/dailyReports";
 import { getAllEmployees } from "@/lib/firebase/employees";
-import { getISTDateStr } from "@/lib/dateIST";
+import { getOrgHolidays } from "@/lib/firebase/holidays";
+import { getHolidayForDate, formatMonthDay } from "@/lib/holidays";
+import { getISTDateStr, getISTDayFromDateStr } from "@/lib/dateIST";
+import { WEEKLY_OFF_DAY } from "@/lib/constants/attendance";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,6 +27,17 @@ import { toast } from "sonner";
 
 const ADMIN_ROLES = ["super_admin", "admin", "hr"];
 
+/** Whether `dateStr` is a day reports aren't required for — the weekly off
+ *  (Sunday) or one of the org's yearly fixed holidays — and why. */
+function getOffInfo(dateStr, holidays) {
+  const holiday = getHolidayForDate(dateStr, holidays);
+  if (holiday) return { type: "holiday", label: holiday.name };
+  if (getISTDayFromDateStr(dateStr) === WEEKLY_OFF_DAY) {
+    return { type: "weekly_off", label: "Weekly Off (Sunday)" };
+  }
+  return null;
+}
+
 export default function DailyReportPanel() {
     const { user } = useAuth();
     const isAdminView = ADMIN_ROLES.includes(user.role);
@@ -37,10 +51,13 @@ function EmployeeReportForm() {
     const [existingReport, setExistingReport] = useState(null);
     const [text, setText] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    const [offInfo, setOffInfo] = useState(null);
+    const [submitAnyway, setSubmitAnyway] = useState(false);
 
     useEffect(() => {
-        getTodayReport(user.uid).then((r) => {
+        Promise.all([getTodayReport(user.uid), getOrgHolidays()]).then(([r, holidays]) => {
             setExistingReport(r);
+            setOffInfo(getOffInfo(getISTDateStr(), holidays));
             setLoading(false);
         });
     }, [user.uid]);
@@ -68,6 +85,8 @@ function EmployeeReportForm() {
 
     if (loading) return null;
 
+    const showOffNotice = offInfo && !existingReport && !submitAnyway;
+
     return (
         <Card>
             <CardContent className="p-4 sm:p-5">
@@ -84,11 +103,29 @@ function EmployeeReportForm() {
                             {existingReport.report}
                         </div>
                     </>
+                ) : showOffNotice ? (
+                    <div className="flex flex-col gap-2">
+                        <p className="text-xs text-slate-500">
+                            {offInfo.type === "holiday"
+                                ? `Today is ${offInfo.label} — a holiday. No daily report is required.`
+                                : "Today is the weekly off (Sunday). No daily report is required."}
+                        </p>
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="w-fit"
+                            onClick={() => setSubmitAnyway(true)}
+                        >
+                            I worked today — submit a report
+                        </Button>
+                    </div>
                 ) : (
                     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
                         <p className="text-xs text-slate-500">
-                            Summarize what you worked on today. You must submit this before you can check out,
-                            and skipping it may result in the day being auto-marked as leave.
+                            {offInfo
+                                ? "Summarize what you worked on today."
+                                : "Summarize what you worked on today. You must submit this before you can check out, and skipping it may result in the day being auto-marked as leave."}
                         </p>
                         <Textarea
                             rows={5}
@@ -119,10 +156,15 @@ function AdminReportsView() {
     const [loading, setLoading] = useState(true);
     const [reports, setReports] = useState([]);
     const [missing, setMissing] = useState([]);
+    const [holidays, setHolidays] = useState([]);
 
     const [historyEmp, setHistoryEmp] = useState(null); // { uid, name }
     const [historyLoading, setHistoryLoading] = useState(false);
     const [history, setHistory] = useState([]);
+
+    useEffect(() => {
+        getOrgHolidays().then(setHolidays);
+    }, []);
 
     useEffect(() => {
         load(selectedDate);
@@ -142,6 +184,8 @@ function AdminReportsView() {
         setMissing(activeEmployees.filter((e) => !submittedUids.has(e.uid)));
         setLoading(false);
     }
+
+    const offInfo = getOffInfo(selectedDate, holidays);
 
     async function openHistory(uid, name) {
         setHistoryEmp({ uid, name });
@@ -218,18 +262,38 @@ function AdminReportsView() {
 
                     <Card>
                         <CardContent className="p-4 sm:p-5">
-                            <h3 className="mb-3 text-sm font-semibold text-slate-900 sm:text-base">
-                                Not Yet Submitted — {selectedDate} ({missing.length})
-                            </h3>
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <h3 className="text-sm font-semibold text-slate-900 sm:text-base">
+                                    {offInfo ? "Not Submitted" : "Not Yet Submitted"} — {selectedDate} ({missing.length})
+                                </h3>
+                                {offInfo && (
+                                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                                        {offInfo.type === "holiday" ? `Holiday · ${offInfo.label}` : offInfo.label}
+                                    </span>
+                                )}
+                            </div>
+                            {offInfo && (
+                                <p className="mb-3 text-xs text-slate-500">
+                                    Reports aren&apos;t required on this day, so no one below is flagged as missing.
+                                </p>
+                            )}
                             {missing.length === 0 ? (
-                                <p className="text-sm text-slate-500">Everyone active submitted a report for this date.</p>
+                                <p className="text-sm text-slate-500">
+                                    {offInfo
+                                        ? "No one submitted a report for this date."
+                                        : "Everyone active submitted a report for this date."}
+                                </p>
                             ) : (
                                 <div className="flex flex-wrap gap-2">
                                     {missing.map((e) => (
                                         <button
                                             key={e.uid}
                                             onClick={() => openHistory(e.uid, e.name)}
-                                            className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                                            className={`rounded-full px-3 py-1 text-xs font-medium ${
+                                                offInfo
+                                                    ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                                    : "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                            }`}
                                         >
                                             {e.name}
                                         </button>

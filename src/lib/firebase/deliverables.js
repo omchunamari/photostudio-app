@@ -86,6 +86,28 @@ export async function getDeliverablesForProject(projectId) {
 }
 
 /**
+ * Recomputes and stores `assignedDeliverableUids` on the parent project doc
+ * — the deduplicated set of everyone currently assigned to at least one of
+ * that project's deliverables. This is denormalized purely so
+ * firestore.rules can check it: rules can't run a query across the
+ * deliverables subcollection to see "is this uid assigned to anything
+ * here", but they *can* cheaply get() a single field off the project doc.
+ * See isDeliverableAssigneeOfProject() in firestore.rules, which uses this
+ * to let a deliverable assignee read that project's events (and therefore
+ * log storage for them) without being added to any event's team.
+ * Called after any write that could change who's assigned to a deliverable
+ * on this project — always from an admin/PM context, matching the project
+ * doc's own update rule.
+ */
+async function syncProjectDeliverableAssigneeUids(projectId) {
+  const list = await getDeliverablesForProject(projectId);
+  const uids = Array.from(new Set(list.map((d) => d.assignedUid).filter(Boolean)));
+  await updateDoc(doc(db, "projects", projectId), {
+    assignedDeliverableUids: uids,
+  });
+}
+
+/**
  * Org-wide read across every project's deliverables subcollection.
  * Loops per-project (like getAllEvents in events.js) rather than a
  * collectionGroup query, since a collectionGroup list gated by a role
@@ -168,8 +190,12 @@ export async function updateDeliverable(projectId, deliverableId, data) {
     ...data,
     updatedAt: new Date().toISOString(),
   });
+  if ("assignedUid" in data) {
+    await syncProjectDeliverableAssigneeUids(projectId);
+  }
 }
 
 export async function deleteDeliverable(projectId, deliverableId) {
   await deleteDoc(doc(db, "projects", projectId, "deliverables", deliverableId));
+  await syncProjectDeliverableAssigneeUids(projectId);
 }

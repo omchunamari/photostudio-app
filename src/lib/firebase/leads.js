@@ -27,6 +27,7 @@ export async function createLead(data, createdByUid, createdByName) {
     handledByName: data.handledByName || "",
     followUpDate: data.followUpDate || null,
     followUpTime: data.followUpTime || null,
+    priority: data.priority || null, // "Hot" | "Warm" | "Cold" | null (unset)
     status: "New Inquiry",
     createdBy: createdByUid,
     createdAt: now,
@@ -67,6 +68,13 @@ export async function updateLead(id, data) {
 export async function updateLeadStatus(id, status) {
   await updateDoc(doc(db, "leads", id), {
     status,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export async function updateLeadPriority(id, priority) {
+  await updateDoc(doc(db, "leads", id), {
+    priority: priority || null,
     updatedAt: new Date().toISOString(),
   });
 }
