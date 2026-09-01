@@ -20,8 +20,16 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import RichTextEditor from "@/components/quotes/RichTextEditor";
-import { Plus, Trash2, X, CalendarOff } from "lucide-react";
+import { Plus, Trash2, X, CalendarOff, Copy, Lock, ChevronUp, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import {
   getOrgQuoteSettings,
@@ -42,6 +50,13 @@ import {
 import { getOrgHolidays, saveOrgHolidays } from "@/lib/firebase/holidays";
 import { formatMonthDay, sortByMonthDay } from "@/lib/holidays";
 import { blankEvent } from "@/lib/constants/quotations";
+import { getEnquiryFormConfig, saveEnquiryFormConfig } from "@/lib/firebase/enquiryForm";
+import {
+  DEFAULT_ENQUIRY_FORM,
+  ENQUIRY_FIELD_TYPES,
+  LOCKED_FIELD_KEYS,
+  slugifyFieldKey,
+} from "@/lib/constants/enquiryForm";
 
 function SettingsContent() {
   return (
@@ -58,6 +73,7 @@ function SettingsContent() {
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="schedules">Payment Schedules</TabsTrigger>
           <TabsTrigger value="holidays">Holidays</TabsTrigger>
+          <TabsTrigger value="enquiryForm">Enquiry Form</TabsTrigger>
         </TabsList>
 
         <TabsContent value="org">
@@ -74,6 +90,9 @@ function SettingsContent() {
         </TabsContent>
         <TabsContent value="holidays">
           <HolidaysPanel />
+        </TabsContent>
+        <TabsContent value="enquiryForm">
+          <EnquiryFormPanel />
         </TabsContent>
       </Tabs>
     </AppShell>
@@ -822,6 +841,248 @@ function HolidaysPanel() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function EnquiryFormPanel() {
+  const [form, setForm] = useState(DEFAULT_ENQUIRY_FORM);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [publicUrl, setPublicUrl] = useState("");
+
+  useEffect(() => {
+    getEnquiryFormConfig().then((cfg) => {
+      setForm(cfg);
+      setLoading(false);
+    });
+    if (typeof window !== "undefined") {
+      setPublicUrl(`${window.location.origin}/enquire`);
+    }
+  }, []);
+
+  function updateField(id, patch) {
+    setForm((f) => ({
+      ...f,
+      fields: f.fields.map((field) => (field.id === id ? { ...field, ...patch } : field)),
+    }));
+  }
+
+  function moveField(id, dir) {
+    setForm((f) => {
+      const idx = f.fields.findIndex((field) => field.id === id);
+      const swapWith = idx + dir;
+      if (swapWith < 0 || swapWith >= f.fields.length) return f;
+      const fields = [...f.fields];
+      [fields[idx], fields[swapWith]] = [fields[swapWith], fields[idx]];
+      return { ...f, fields };
+    });
+  }
+
+  function addField() {
+    const existingKeys = form.fields.map((f) => f.key);
+    const id = slugifyFieldKey("customField", existingKeys) + Date.now();
+    setForm((f) => ({
+      ...f,
+      fields: [
+        ...f.fields,
+        {
+          id,
+          key: slugifyFieldKey("New Question", existingKeys),
+          label: "New Question",
+          type: "text",
+          required: false,
+          locked: false,
+          mapsTo: "custom",
+          options: [],
+        },
+      ],
+    }));
+  }
+
+  function removeField(id) {
+    const field = form.fields.find((f) => f.id === id);
+    if (field?.locked) return;
+    setForm((f) => ({ ...f, fields: f.fields.filter((field) => field.id !== id) }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      // Locked fields always stay required, regardless of what got toggled
+      // in the UI before saving.
+      const fields = form.fields.map((f) =>
+        f.locked ? { ...f, required: true } : f
+      );
+      await saveEnquiryFormConfig({ ...form, fields });
+      setForm((f) => ({ ...f, fields }));
+      toast.success("Enquiry form saved");
+    } catch (err) {
+      toast.error(err.message || "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCopyLink() {
+    if (!publicUrl) return;
+    navigator.clipboard.writeText(publicUrl);
+    toast.success("Link copied");
+  }
+
+  if (loading) {
+    return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+  }
+
+  return (
+    <div className="mt-4 flex flex-col gap-4">
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-foreground">Public form link</p>
+            <p className="break-all text-xs text-muted-foreground">{publicUrl}</p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={handleCopyLink}>
+              <Copy className="h-3.5 w-3.5" /> Copy link
+            </Button>
+            {publicUrl && (
+              <a
+                href={publicUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 items-center rounded-md border border-border bg-background px-2.5 text-sm font-medium shadow-xs hover:bg-muted"
+              >
+                Preview
+              </a>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-4">
+          <div>
+            <Label>Form title</Label>
+            <Input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
+          </div>
+          <div>
+            <Label>Subtitle</Label>
+            <Input
+              value={form.subtitle}
+              onChange={(e) => setForm((f) => ({ ...f, subtitle: e.target.value }))}
+              placeholder="You're just a step away from getting us making your day special!"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex flex-col gap-2">
+        {form.fields.map((field, idx) => (
+          <Card key={field.id}>
+            <CardContent className="flex flex-col gap-2 p-3">
+              <div className="flex items-start gap-2">
+                <div className="flex flex-col">
+                  <button
+                    type="button"
+                    disabled={idx === 0}
+                    onClick={() => moveField(field.id, -1)}
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={idx === form.fields.length - 1}
+                    onClick={() => moveField(field.id, 1)}
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex-1">
+                  <Input
+                    value={field.label}
+                    onChange={(e) => updateField(field.id, { label: e.target.value })}
+                    className="font-medium"
+                  />
+                </div>
+
+                <Select
+                  value={field.type}
+                  onValueChange={(v) => updateField(field.id, { type: v })}
+                  disabled={field.locked}
+                >
+                  <SelectTrigger className="w-40 shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ENQUIRY_FIELD_TYPES.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>
+                        {t.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {field.locked ? (
+                  <span
+                    title="Required to create a lead — can't be removed or made optional"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center text-muted-foreground"
+                  >
+                    <Lock className="h-3.5 w-3.5" />
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => removeField(field.id)}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center text-red-500 hover:text-red-600"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {field.type === "select" && (
+                <div className="ml-8">
+                  <Label className="text-xs">Options (comma separated)</Label>
+                  <Input
+                    value={(field.options || []).join(", ")}
+                    onChange={(e) =>
+                      updateField(field.id, {
+                        options: e.target.value.split(",").map((o) => o.trim()).filter(Boolean),
+                      })
+                    }
+                    placeholder="Wedding, Pre-Wedding, Engagement"
+                  />
+                </div>
+              )}
+
+              <label className="ml-8 flex w-fit items-center gap-2 text-sm text-foreground">
+                <Checkbox
+                  checked={field.locked ? true : field.required}
+                  disabled={field.locked}
+                  onCheckedChange={(checked) => updateField(field.id, { required: !!checked })}
+                />
+                Required
+                {field.locked && (
+                  <span className="text-xs text-muted-foreground">(always required — needed to create a lead)</span>
+                )}
+              </label>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <Button size="sm" variant="outline" onClick={addField}>
+          <Plus className="h-3.5 w-3.5" /> Add question
+        </Button>
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? "Saving..." : "Save Form"}
+        </Button>
+      </div>
+    </div>
   );
 }
 

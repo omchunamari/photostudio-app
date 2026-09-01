@@ -67,6 +67,7 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -84,6 +85,7 @@ import {
   Eye,
   Copy,
   Link as LinkIcon,
+  Globe,
 } from "lucide-react";
 
 const ACTIVITY_ICONS = {
@@ -375,7 +377,18 @@ function LeadDetailContent() {
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Lead</p>
-          <h2 className="font-serif text-2xl font-semibold text-foreground">{lead.clientName}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="font-serif text-2xl font-semibold text-foreground">{lead.clientName}</h2>
+            {lead.origin === "form" && (
+              <Badge
+                variant="outline"
+                className="gap-1 border-[var(--accent)]/30 bg-[var(--accent)]/10 text-[var(--accent)]"
+              >
+                <Globe data-icon="inline-start" />
+                Form
+              </Badge>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={handleConvertToProject} disabled={converting}>

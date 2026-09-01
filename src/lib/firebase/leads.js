@@ -22,6 +22,7 @@ export async function createLead(data, createdByUid, createdByName) {
     eventDate: data.eventDate || null, // tentative event date (the client's event, not a sales meeting)
     eventDetails: data.eventDetails || "",
     source: data.source || null,
+    origin: "manual", // form-submitted leads get "form" — see public-submit route
     budget: data.budget || 0,
     handledByUid: data.handledByUid || null,
     handledByName: data.handledByName || "",

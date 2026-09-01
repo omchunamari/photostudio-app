@@ -59,6 +59,7 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -69,7 +70,22 @@ import {
   Upload,
   Plus,
   Search,
+  Globe,
 } from "lucide-react";
+
+// Small badge marking a lead that arrived through the public enquiry form,
+// so it reads apart from leads someone typed in by hand.
+function FormLeadBadge({ className }) {
+  return (
+    <Badge
+      variant="outline"
+      className={`gap-1 border-[var(--accent)]/30 bg-[var(--accent)]/10 text-[var(--accent)] ${className || ""}`}
+    >
+      <Globe data-icon="inline-start" />
+      Form
+    </Badge>
+  );
+}
 
 const emptyForm = {
   clientName: "",
@@ -101,6 +117,7 @@ function LeadsContent() {
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [execFilter, setExecFilter] = useState("all");
+  const [originFilter, setOriginFilter] = useState("all"); // "all" | "form" | "manual"
 
   const [form, setForm] = useState(emptyForm);
 
@@ -183,10 +200,11 @@ function LeadsContent() {
   }
 
   function handleExport() {
-    const header = ["Client Name", "Phone", "Email", "Event Type", "Tentative Event Date", "Event Details", "Quoted Amount", "Source", "Stage", "Priority", "Handled By", "Follow Up", "Added"];
+    const header = ["Client Name", "Phone", "Email", "Event Type", "Tentative Event Date", "Event Details", "Quoted Amount", "Source", "Origin", "Stage", "Priority", "Handled By", "Follow Up", "Added"];
     const rows = filteredLeads.map((l) => [
       l.clientName, l.phone, l.email, l.projectType || "", l.eventDate || "",
       (l.eventDetails || "").replace(/\n/g, " "), l.budget || 0, l.source || "",
+      l.origin === "form" ? "Form" : "Manual",
       l.status, l.priority || "", l.handledByName || "", l.followUpDate || "", (l.createdAt || "").slice(0, 10),
     ]);
     const csv = [header, ...rows]
@@ -227,6 +245,7 @@ function LeadsContent() {
       .filter((l) => priorityFilter === "all" || l.priority === priorityFilter)
       .filter((l) => sourceFilter === "all" || l.source === sourceFilter)
       .filter((l) => execFilter === "all" || l.handledByUid === execFilter)
+      .filter((l) => originFilter === "all" || (originFilter === "form" ? l.origin === "form" : l.origin !== "form"))
       .filter((l) => {
         const term = search.trim().toLowerCase();
         if (!term) return true;
@@ -238,7 +257,7 @@ function LeadsContent() {
       })
       // Overdue follow-ups float to the top so nothing slips through.
       .sort((a, b) => Number(isOverdue(b)) - Number(isOverdue(a)));
-  }, [leads, tab, stageFilter, priorityFilter, sourceFilter, execFilter, search]);
+  }, [leads, tab, stageFilter, priorityFilter, sourceFilter, execFilter, originFilter, search]);
 
   return (
     <AppShell>
@@ -482,6 +501,18 @@ function LeadsContent() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={originFilter} onValueChange={setOriginFilter}>
+          <SelectTrigger className="w-full sm:w-[150px]">
+            <SelectValue>
+              {(v) => (v === "all" ? "All leads" : v === "form" ? "Form leads" : "Manual leads")}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All leads</SelectItem>
+            <SelectItem value="form">Form leads</SelectItem>
+            <SelectItem value="manual">Manual leads</SelectItem>
+          </SelectContent>
+        </Select>
         <span className="whitespace-nowrap text-xs text-muted-foreground">
           showing {filteredLeads.length} of {leads.length} leads
         </span>
@@ -519,7 +550,10 @@ function LeadsContent() {
                 >
                   <TableCell onClick={(e) => e.stopPropagation()}><Checkbox /></TableCell>
                   <TableCell>
-                    <span className="font-medium text-foreground">{lead.clientName}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium text-foreground">{lead.clientName}</span>
+                      {lead.origin === "form" && <FormLeadBadge />}
+                    </div>
                     <p className="text-xs text-muted-foreground">{lead.phone || lead.email || "—"}</p>
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
@@ -605,7 +639,10 @@ function LeadsContent() {
             >
               <CardContent className="flex flex-col gap-2 p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <span className="font-medium text-foreground">{lead.clientName}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-foreground">{lead.clientName}</span>
+                    {lead.origin === "form" && <FormLeadBadge />}
+                  </div>
                   <div className="flex items-center gap-1.5">
                     {lead.priority && <StatusBadge status={lead.priority} />}
                     <StatusBadge status={lead.status} />
