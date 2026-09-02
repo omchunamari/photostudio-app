@@ -8,12 +8,16 @@
   import {
     DELIVERABLE_TYPES,
     DELIVERABLE_STATUSES,
+    DEFAULT_DELIVERABLE_CATEGORIES,
     getAllDeliverables,
     addDeliverableStatusUpdate,
     ensureDeliverablesForProject,
     addDeliverable,
     updateDeliverable,
     deleteDeliverable,
+    getAllDeliverableCategories,
+    addCustomDeliverableCategory,
+    removeCustomDeliverableCategory,
   } from "@/lib/firebase/deliverables";
   import {
     getAllStorageEntries,
@@ -65,6 +69,7 @@
     AlertTriangle,
     MessageSquare,
     FileText,
+    X,
   } from "lucide-react";
   import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
@@ -73,6 +78,30 @@
     "In Progress": "oklch(0.75 0.15 75)",
     Pending: "oklch(0.75 0.05 75)",
   };
+
+  // Deliverable category badge colors — fixed defaults get a stable color,
+  // any custom category falls back to a deterministic hash-based pick so
+  // it stays consistent across renders without needing to be registered
+  // here. Mirrors categoryColor() on the project detail page.
+  const DELIVERABLE_CATEGORY_COLORS = {
+    Photography: "bg-sky-50 text-sky-700",
+    Videography: "bg-violet-50 text-violet-700",
+    Album: "bg-amber-50 text-amber-700",
+    Other: "bg-slate-100 text-slate-700",
+  };
+  const FALLBACK_DELIVERABLE_CATEGORY_PALETTE = [
+    "bg-rose-50 text-rose-700",
+    "bg-cyan-50 text-cyan-700",
+    "bg-fuchsia-50 text-fuchsia-700",
+    "bg-lime-50 text-lime-700",
+    "bg-orange-50 text-orange-700",
+  ];
+  function categoryColor(category) {
+    if (DELIVERABLE_CATEGORY_COLORS[category]) return DELIVERABLE_CATEGORY_COLORS[category];
+    let hash = 0;
+    for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
+    return FALLBACK_DELIVERABLE_CATEGORY_PALETTE[hash % FALLBACK_DELIVERABLE_CATEGORY_PALETTE.length];
+  }
 
   /** Indian financial year (Apr–Mar) label list, current year first, going back 4 years. */
   function getFinancialYearOptions() {
@@ -113,7 +142,7 @@
    * entirely when canManage is false, so an employee's save can never
    * attempt a write firestore.rules would reject.
    */
-  function DeliverableDialog({ open, onOpenChange, deliverable, people, canManage, onSaved }) {
+  function DeliverableDialog({ open, onOpenChange, deliverable, people, categories, canManage, onSaved }) {
     const { user } = useAuth();
     const [form, setForm] = useState({});
     const [note, setNote] = useState("");
@@ -123,6 +152,7 @@
       if (deliverable) {
         setForm({
           status: deliverable.status || "Pending",
+          category: deliverable.category || DEFAULT_DELIVERABLE_CATEGORIES[DEFAULT_DELIVERABLE_CATEGORIES.length - 1],
           assignedUid: deliverable.assignedUid || "",
           startDate: deliverable.startDate || "",
           endDate: deliverable.endDate || "",
@@ -143,6 +173,7 @@
         if (canManage) {
           const person = people.find((p) => p.uid === form.assignedUid);
           await updateDeliverable(deliverable.projectId, deliverable.id, {
+            category: form.category || "Other",
             assignedUid: form.assignedUid || null,
             assignedName: person?.name || null,
             startDate: form.startDate || null,
@@ -195,6 +226,29 @@
                 </SelectContent>
               </Select>
             </div>
+
+            {canManage ? (
+              <div>
+                <Label>Category</Label>
+                <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {categories.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              deliverable.category && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Category</p>
+                  <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${categoryColor(deliverable.category)}`}>
+                    {deliverable.category}
+                  </span>
+                </div>
+              )
+            )}
 
             {canManage ? (
               <>
@@ -291,12 +345,17 @@
     );
   }
 
-  function AddDeliverableDialog({ open, onOpenChange, project, onAdded }) {
+  function AddDeliverableDialog({ open, onOpenChange, project, categories, onAdded }) {
     const [type, setType] = useState("");
+    const [category, setCategory] = useState(categories[0] || DEFAULT_DELIVERABLE_CATEGORIES[0]);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-      if (open) setType("");
+      if (open) {
+        setType("");
+        setCategory(categories[0] || DEFAULT_DELIVERABLE_CATEGORIES[0]);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
     async function handleAdd() {
@@ -306,7 +365,7 @@
       }
       setSaving(true);
       try {
-        await addDeliverable(project, type.trim());
+        await addDeliverable(project, type.trim(), category);
         toast.success("Deliverable added");
         onOpenChange(false);
         onAdded();
@@ -323,12 +382,123 @@
           <DialogHeader>
             <DialogTitle>Add Deliverable</DialogTitle>
           </DialogHeader>
-          <div>
-            <Label htmlFor="dtype">Name</Label>
-            <Input id="dtype" value={type} onChange={(e) => setType(e.target.value)} placeholder="e.g. Teaser, Cinematic Trailer" />
+          <div className="flex flex-col gap-4">
+            <div>
+              <Label htmlFor="dtype">Name</Label>
+              <Input id="dtype" value={type} onChange={(e) => setType(e.target.value)} placeholder="e.g. Teaser, Cinematic Trailer" />
+            </div>
+            <div>
+              <Label htmlFor="dcategory">Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger id="dcategory"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {categories.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={handleAdd} disabled={saving}>{saving ? "Adding..." : "Add"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  /** Add-category dialog, admin-only — reused wherever deliverables get
+   * created (project detail page has its own copy of this same pattern
+   * for expense categories). Categories are org-wide, stored on
+   * orgSettings/main, so adding/removing here shows up on both pages. */
+  function ManageDeliverableCategoriesDialog({ open, onOpenChange, categories, onChanged }) {
+    const [newName, setNewName] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [removing, setRemoving] = useState(null);
+
+    async function handleAdd(e) {
+      e.preventDefault();
+      if (!newName.trim()) return;
+      setSaving(true);
+      try {
+        await addCustomDeliverableCategory(newName);
+        setNewName("");
+        toast.success("Category added");
+        onChanged();
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    async function handleRemove(name) {
+      setRemoving(name);
+      try {
+        await removeCustomDeliverableCategory(name);
+        toast.success("Category removed");
+        onChanged();
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        setRemoving(null);
+      }
+    }
+
+    const customCategories = categories.filter((c) => !DEFAULT_DELIVERABLE_CATEGORIES.includes(c));
+
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="w-[95vw] max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Manage Deliverable Categories</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleAdd} className="flex items-center gap-2">
+            <Input
+              placeholder="New category name..."
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <Button type="submit" size="sm" disabled={saving || !newName.trim()}>
+              {saving ? "Adding..." : "Add"}
+            </Button>
+          </form>
+          <div>
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Default (cannot remove)</p>
+            <div className="flex flex-wrap gap-2">
+              {DEFAULT_DELIVERABLE_CATEGORIES.map((c) => (
+                <span key={c} className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryColor(c)}`}>
+                  {c}
+                </span>
+              ))}
+            </div>
+          </div>
+          {customCategories.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Custom</p>
+              <div className="flex flex-wrap gap-2">
+                {customCategories.map((c) => (
+                  <span
+                    key={c}
+                    className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium ${categoryColor(c)}`}
+                  >
+                    {c}
+                    <button
+                      type="button"
+                      onClick={() => handleRemove(c)}
+                      disabled={removing === c}
+                      className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
+                      title={`Remove ${c}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -530,7 +700,7 @@
   /* Storage list (shared by the Projects>Storage sub-tab and top Storage)   */
   /* ---------------------------------------------------------------------- */
 
-  function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage }) {
+  function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage, canLog, deliverablesByProjectId }) {
     if (events.length === 0) {
       return <p className="text-sm text-muted-foreground">No events found.</p>;
     }
@@ -539,6 +709,21 @@
         {events.map((ev) => {
           const day = ev.eventStartDate ? new Date(ev.eventStartDate) : null;
           const team = ev.team || [];
+
+          // Rows come from two sources: the event's crew (Assign Team on
+          // Events) and anyone assigned to a deliverable on this project
+          // (Assigned To on Deliverables) — a post-production assignee who
+          // never shot the event still needs somewhere to log storage they
+          // received. Team entries win on name/role when someone is both.
+          const deliverableAssignees = [];
+          (deliverablesByProjectId?.get(ev.projectId) || []).forEach((d) => {
+            if (!d.assignedUid) return;
+            if (deliverableAssignees.some((a) => a.uid === d.assignedUid)) return;
+            deliverableAssignees.push({ uid: d.assignedUid, name: d.assignedName || "—", role: d.type, fromDeliverable: true });
+          });
+          const teamUids = new Set(team.map((m) => m.uid));
+          const members = [...team, ...deliverableAssignees.filter((a) => !teamUids.has(a.uid))];
+
           return (
             <Card key={ev.id}>
               <CardContent className="p-4">
@@ -556,23 +741,24 @@
                     </div>
                   </div>
                   <div className="text-right">
-                    {team.length === 0 ? (
+                    {members.length === 0 ? (
                       <span className="text-xs text-muted-foreground">No team assigned</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">
-                        {team.filter((m) => entriesByKey.has(`${ev.id}_${m.uid}`)).length}/{team.length} received
+                        {members.filter((m) => entriesByKey.has(`${ev.id}_${m.uid}`)).length}/{members.length} received
                       </span>
                     )}
                   </div>
                 </div>
 
-                {team.length === 0 ? (
+                {members.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    No team members assigned. Assign team via the Events tab to enable storage logging for this event.
+                    No team members assigned. Assign team via the Events tab, or assign a deliverable
+                    on this project, to enable storage logging for this event.
                   </p>
                 ) : (
                   <div className="flex flex-col gap-2">
-                    {team.map((m) => {
+                    {members.map((m) => {
                       const entry = entriesByKey.get(`${ev.id}_${m.uid}`);
                       return (
                         <div
@@ -582,7 +768,9 @@
                           <div className="flex min-w-0 items-center gap-2">
                             <AvatarInitials name={m.name} size="sm" className="h-6 w-6 shrink-0 text-[10px]" />
                             <span className="truncate text-sm text-foreground">{m.name}</span>
-                            <span className="shrink-0 text-xs text-muted-foreground">{m.role}</span>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {m.role}{m.fromDeliverable ? " (Post-Production)" : ""}
+                            </span>
                             {!entry && <span className="shrink-0 text-xs text-rose-600">— not received yet</span>}
                           </div>
                           {entry ? (
@@ -593,10 +781,14 @@
                             >
                               {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""}
                             </button>
-                          ) : (
+                          ) : canLog(ev, m) ? (
                             <Button size="sm" variant="secondary" className="w-full sm:w-auto" onClick={() => onLogStorage(ev, m)}>
                               + Log Storage
                             </Button>
+                          ) : (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              Not assigned to a deliverable on this project
+                            </span>
                           )}
                         </div>
                       );
@@ -713,6 +905,11 @@
             <div className="flex flex-wrap items-center gap-1.5">
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT_STYLES[d.status] || "bg-muted-foreground"}`} />
               <p className="font-medium text-foreground">{d.type}</p>
+              {d.category && (
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${categoryColor(d.category)}`}>
+                  {d.category}
+                </span>
+              )}
               {d.instructions && (
                 <span title="Has instructions for assignee">
                   <FileText className="h-3 w-3 shrink-0 text-amber-600" />
@@ -794,6 +991,7 @@
     people = [],
     showProject = false,
     rowsClickable = false,
+    emptyMessage = "No deliverables yet.",
   }) {
     const grouped = DELIVERABLE_STATUSES.map((status) => ({
       status,
@@ -803,7 +1001,7 @@
     if (deliverables.length === 0) {
       return (
         <Card>
-          <div className="p-6 text-center text-sm text-muted-foreground">No deliverables yet.</div>
+          <div className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>
         </Card>
       );
     }
@@ -844,6 +1042,7 @@
               <TableRow>
                 {showProject && <TableHead>Project</TableHead>}
                 <TableHead>Deliverable</TableHead>
+                <TableHead>Category</TableHead>
                 <TableHead>Assigned To</TableHead>
                 <TableHead>Start</TableHead>
                 <TableHead>End</TableHead>
@@ -857,7 +1056,7 @@
                   <TableRow className="hover:bg-transparent">
                     <TableCell
                       colSpan={
-                        (showProject ? 1 : 0) + 4 + (isAdminView ? 1 : 0)
+                        (showProject ? 1 : 0) + 5 + (isAdminView ? 1 : 0)
                       }
                       className={`py-1.5 text-xs font-semibold uppercase tracking-wide ${STATUS_GROUP_STYLES[group.status] || "bg-muted text-muted-foreground"}`}
                     >
@@ -899,6 +1098,13 @@
                               {updates.length > 0 && updates.length}
                             </button>
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          {d.category && (
+                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${categoryColor(d.category)}`}>
+                              {d.category}
+                            </span>
+                          )}
                         </TableCell>
                         {canEditInline ? (
                           <TableCell onClick={(e) => e.stopPropagation()}>
@@ -983,7 +1189,19 @@
     const [editingDeliverable, setEditingDeliverable] = useState(null);
     const [expandedUpdateIds, setExpandedUpdateIds] = useState(() => new Set());
     const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
+    const [manageDeliverableCategoriesOpen, setManageDeliverableCategoriesOpen] = useState(false);
+    const [deliverableCategories, setDeliverableCategories] = useState(DEFAULT_DELIVERABLE_CATEGORIES);
+    const [projectDeliverableCategoryFilter, setProjectDeliverableCategoryFilter] = useState("All Categories");
     const [storageContext, setStorageContext] = useState(null);
+
+    async function loadDeliverableCategories() {
+      try {
+        const cats = await getAllDeliverableCategories();
+        setDeliverableCategories(cats);
+      } catch (err) {
+        toast.error(err.message || "Failed to load deliverable categories");
+      }
+    }
 
     async function loadOrgData() {
       setLoading(true);
@@ -1010,6 +1228,8 @@
         ]);
         setAllDeliverables(dels);
         setAllStorageEntries(entries);
+
+        if (isAdminView) await loadDeliverableCategories();
       } catch (err) {
         console.error("Failed to load post-production data:", err);
         toast.error(err.message || "Failed to load post-production data");
@@ -1036,6 +1256,7 @@
 
     useEffect(() => {
       if (selectedProjectId) loadProject(selectedProjectId);
+      setProjectDeliverableCategoryFilter("All Categories");
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedProjectId, projects]);
 
@@ -1079,6 +1300,41 @@
       allStorageEntries.forEach((entry) => m.set(`${entry.eventId}_${entry.memberUid}`, entry));
       return m;
     }, [allStorageEntries]);
+
+    const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+
+    // Grouped by project so StorageEventList can look up "who's assigned
+    // to a deliverable here" per event without an O(events × deliverables)
+    // scan. The top-level Storage tab needs every project's deliverables
+    // (allDeliverables); the Projects sub-tab only ever renders one
+    // project's events, so a single-entry map from projectDeliverables is
+    // enough and avoids depending on allDeliverables being loaded/fresh.
+    const deliverablesByProjectId = useMemo(() => {
+      const m = new Map();
+      allDeliverables.forEach((d) => {
+        if (!m.has(d.projectId)) m.set(d.projectId, []);
+        m.get(d.projectId).push(d);
+      });
+      return m;
+    }, [allDeliverables]);
+    const selectedProjectDeliverablesById = useMemo(
+      () => (selectedProjectId ? new Map([[selectedProjectId, projectDeliverables]]) : new Map()),
+      [selectedProjectId, projectDeliverables]
+    );
+
+    // Storage logging is self-service: a team member can log their own
+    // card/storage details for an event only if they're currently assigned
+    // to at least one deliverable on that project (mirrors
+    // isDeliverableAssigneeOfProject() in firestore.rules, which is the
+    // actual enforcement — this just keeps the button from being shown
+    // when the write would fail anyway). Admins/PMs can always log for
+    // anyone, matching isAdminView elsewhere on this page.
+    function canLogStorage(ev, member) {
+      if (isAdminView) return true;
+      if (member.uid !== user.uid) return false;
+      const project = projectsById.get(ev.projectId);
+      return !!project?.assignedDeliverableUids?.includes(user.uid);
+    }
 
     const storageStats = useMemo(() => {
       let allReceived = 0, partial = 0, missing = 0;
@@ -1427,21 +1683,46 @@
 
                   {projectSubTab === "deliverables" ? (
                     <>
-                      {isAdminView && (
-                        <div className="mb-3 flex justify-end">
-                          <Button size="sm" onClick={() => setAddDeliverableOpen(true)}>
-                            <Plus className="h-4 w-4" /> Add Deliverable
-                          </Button>
-                        </div>
-                      )}
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        {projectDeliverables.length > 0 ? (
+                          <Select value={projectDeliverableCategoryFilter} onValueChange={setProjectDeliverableCategoryFilter}>
+                            <SelectTrigger className="h-8 w-[160px] text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="All Categories">All Categories</SelectItem>
+                              {Array.from(new Set(projectDeliverables.map((d) => d.category).filter(Boolean))).map((c) => (
+                                <SelectItem key={c} value={c}>{c}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : <div />}
+                        {isAdminView && (
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => setManageDeliverableCategoriesOpen(true)}>
+                              Manage Categories
+                            </Button>
+                            <Button size="sm" onClick={() => setAddDeliverableOpen(true)}>
+                              <Plus className="h-4 w-4" /> Add Deliverable
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                       <DeliverablesTable
-                        deliverables={projectDeliverables}
+                        deliverables={
+                          projectDeliverableCategoryFilter === "All Categories"
+                            ? projectDeliverables
+                            : projectDeliverables.filter((d) => d.category === projectDeliverableCategoryFilter)
+                        }
                         isAdminView={isAdminView}
                         onEdit={setEditingDeliverable}
                         onDelete={handleDeleteDeliverable}
                         onInlineUpdate={handleInlineDeliverableUpdate}
                         people={people}
                         rowsClickable={!isAdminView}
+                        emptyMessage={
+                          projectDeliverableCategoryFilter === "All Categories"
+                            ? "No deliverables yet."
+                            : "No deliverables in this category."
+                        }
                       />
                     </>
                   ) : (
@@ -1450,6 +1731,8 @@
                       entriesByKey={entriesByKey}
                       onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
                       onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
+                      canLog={canLogStorage}
+                      deliverablesByProjectId={selectedProjectDeliverablesById}
                     />
                   )}
                 </>
@@ -1462,6 +1745,8 @@
             entriesByKey={entriesByKey}
             onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
             onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
+            canLog={canLogStorage}
+            deliverablesByProjectId={deliverablesByProjectId}
           />
         )}
 
@@ -1470,6 +1755,7 @@
           onOpenChange={(open) => !open && setEditingDeliverable(null)}
           deliverable={editingDeliverable}
           people={people}
+          categories={deliverableCategories}
           canManage={isAdminView}
           onSaved={handleDeliverableSaved}
         />
@@ -1477,7 +1763,14 @@
           open={addDeliverableOpen}
           onOpenChange={setAddDeliverableOpen}
           project={selectedProject}
+          categories={deliverableCategories}
           onAdded={handleDeliverableSaved}
+        />
+        <ManageDeliverableCategoriesDialog
+          open={manageDeliverableCategoriesOpen}
+          onOpenChange={setManageDeliverableCategoriesOpen}
+          categories={deliverableCategories}
+          onChanged={loadDeliverableCategories}
         />
         <StorageEntryDialog
           open={!!storageContext}

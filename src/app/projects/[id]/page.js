@@ -21,6 +21,10 @@ import {
   ensureDeliverablesForProject,
   addDeliverable,
   deleteDeliverable,
+  getAllDeliverableCategories,
+  addCustomDeliverableCategory,
+  removeCustomDeliverableCategory,
+  DEFAULT_DELIVERABLE_CATEGORIES,
 } from "@/lib/firebase/deliverables";
 import {
   getInvoicesForProject,
@@ -118,8 +122,15 @@ function ProjectDetailContent() {
   const [deliverables, setDeliverables] = useState([]);
   const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
   const [newDeliverableType, setNewDeliverableType] = useState("");
+  const [newDeliverableCategory, setNewDeliverableCategory] = useState(DEFAULT_DELIVERABLE_CATEGORIES[0]);
   const [savingDeliverable, setSavingDeliverable] = useState(false);
   const [deletingDeliverableId, setDeletingDeliverableId] = useState(null);
+  const [deliverableCategories, setDeliverableCategories] = useState(DEFAULT_DELIVERABLE_CATEGORIES);
+  const [deliverableCategoryFilter, setDeliverableCategoryFilter] = useState("All Categories");
+  const [manageDeliverableCategoriesOpen, setManageDeliverableCategoriesOpen] = useState(false);
+  const [newDeliverableCategoryName, setNewDeliverableCategoryName] = useState("");
+  const [savingDeliverableCategory, setSavingDeliverableCategory] = useState(false);
+  const [removingDeliverableCategory, setRemovingDeliverableCategory] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -203,6 +214,15 @@ function ProjectDetailContent() {
 
       if (isAdminOrPM) {
         try {
+          const delCats = await getAllDeliverableCategories();
+          setDeliverableCategories(delCats);
+        } catch (err) {
+          toast.error(`Failed loading deliverable categories: ${err.message}`);
+        }
+      }
+
+      if (isAdminOrPM) {
+        try {
           const emps = await getAllEmployees();
           setEmployees(emps.filter((e) => e.status === "active"));
         } catch (err) {
@@ -271,16 +291,46 @@ function ProjectDetailContent() {
     }
     setSavingDeliverable(true);
     try {
-      await addDeliverable(project, newDeliverableType.trim());
+      await addDeliverable(project, newDeliverableType.trim(), newDeliverableCategory);
       toast.success("Deliverable added");
       setAddDeliverableOpen(false);
       setNewDeliverableType("");
+      setNewDeliverableCategory(deliverableCategories[0] || DEFAULT_DELIVERABLE_CATEGORIES[0]);
       const dels = await ensureDeliverablesForProject(project);
       setDeliverables(dels);
     } catch (err) {
       toast.error(err.message || "Failed to add deliverable");
     } finally {
       setSavingDeliverable(false);
+    }
+  }
+
+  async function handleAddDeliverableCategory(e) {
+    e.preventDefault();
+    if (!newDeliverableCategoryName.trim()) return;
+    setSavingDeliverableCategory(true);
+    try {
+      const next = await addCustomDeliverableCategory(newDeliverableCategoryName);
+      setDeliverableCategories([...DEFAULT_DELIVERABLE_CATEGORIES, ...next]);
+      setNewDeliverableCategoryName("");
+      toast.success("Category added");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingDeliverableCategory(false);
+    }
+  }
+
+  async function handleRemoveDeliverableCategory(name) {
+    setRemovingDeliverableCategory(name);
+    try {
+      const next = await removeCustomDeliverableCategory(name);
+      setDeliverableCategories([...DEFAULT_DELIVERABLE_CATEGORIES, ...next]);
+      toast.success("Category removed");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setRemovingDeliverableCategory(null);
     }
   }
 
@@ -1134,21 +1184,111 @@ function ProjectDetailContent() {
           <div>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-base font-medium text-slate-900 sm:text-lg">Deliverables</h3>
-              {isAdminOrPM && (
-                <Button size="sm" variant="secondary" onClick={() => setAddDeliverableOpen(true)}>
-                  <Plus className="h-4 w-4" /> Add Deliverable
-                </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {deliverables.length > 0 && (
+                  <Select value={deliverableCategoryFilter} onValueChange={setDeliverableCategoryFilter}>
+                    <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="All Categories">All Categories</SelectItem>
+                      {Array.from(new Set(deliverables.map((d) => d.category).filter(Boolean))).map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {isAdminOrPM && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Dialog open={manageDeliverableCategoriesOpen} onOpenChange={setManageDeliverableCategoriesOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm" variant="outline">Manage Categories</Button>
+                    </DialogTrigger>
+                    <DialogContent className="w-[95vw] max-w-sm">
+                      <DialogHeader>
+                        <DialogTitle>Manage Deliverable Categories</DialogTitle>
+                      </DialogHeader>
+                      <form onSubmit={handleAddDeliverableCategory} className="flex items-center gap-2">
+                        <Input
+                          placeholder="New category name..."
+                          value={newDeliverableCategoryName}
+                          onChange={(e) => setNewDeliverableCategoryName(e.target.value)}
+                        />
+                        <Button type="submit" size="sm" disabled={savingDeliverableCategory || !newDeliverableCategoryName.trim()}>
+                          {savingDeliverableCategory ? "Adding..." : "Add"}
+                        </Button>
+                      </form>
+                      <div>
+                        <p className="mb-2 text-xs font-medium text-slate-500">Default (cannot remove)</p>
+                        <div className="flex flex-wrap gap-2">
+                          {DEFAULT_DELIVERABLE_CATEGORIES.map((c) => (
+                            <span
+                              key={c}
+                              className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryColor(c)}`}
+                            >
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      {deliverableCategories.length > DEFAULT_DELIVERABLE_CATEGORIES.length && (
+                        <div>
+                          <p className="mb-2 text-xs font-medium text-slate-500">Custom</p>
+                          <div className="flex flex-wrap gap-2">
+                            {deliverableCategories
+                              .filter((c) => !DEFAULT_DELIVERABLE_CATEGORIES.includes(c))
+                              .map((c) => (
+                                <span
+                                  key={c}
+                                  className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium ${categoryColor(c)}`}
+                                >
+                                  {c}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveDeliverableCategory(c)}
+                                    disabled={removingDeliverableCategory === c}
+                                    className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
+                                    title={`Remove ${c}`}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </span>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                      <Button type="button" variant="outline" onClick={() => setManageDeliverableCategoriesOpen(false)}>
+                        Done
+                      </Button>
+                    </DialogContent>
+                  </Dialog>
+                  <Button size="sm" variant="secondary" onClick={() => setAddDeliverableOpen(true)}>
+                    <Plus className="h-4 w-4" /> Add Deliverable
+                  </Button>
+                </div>
               )}
+              </div>
             </div>
             {deliverables.length === 0 ? (
               <p className="text-sm text-slate-500">No deliverables yet.</p>
-            ) : (
+            ) : (() => {
+              const visibleDeliverables = deliverableCategoryFilter === "All Categories"
+                ? deliverables
+                : deliverables.filter((d) => d.category === deliverableCategoryFilter);
+              return visibleDeliverables.length === 0 ? (
+                <p className="text-sm text-slate-500">No deliverables in this category.</p>
+              ) : (
               <div className="flex flex-col gap-2">
-                {deliverables.map((d) => (
+                {visibleDeliverables.map((d) => (
                   <Card key={d.id}>
                     <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium text-slate-900">{d.type}</p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="truncate font-medium text-slate-900">{d.type}</p>
+                          {d.category && (
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${categoryColor(d.category)}`}>
+                              {d.category}
+                            </span>
+                          )}
+                        </div>
                         <p className="truncate text-xs text-slate-500">
                           {d.assignedName ? `Assigned to ${d.assignedName}` : "Unassigned"}
                           {d.deadline ? ` · Due ${d.deadline}` : ""}
@@ -1173,7 +1313,8 @@ function ProjectDetailContent() {
                   </Card>
                 ))}
               </div>
-            )}
+              );
+            })()}
             <p className="mt-2 text-xs text-slate-400">
               Assignment, dates, and deadlines are set from the Post-Production page.
             </p>
@@ -1387,6 +1528,17 @@ function ProjectDetailContent() {
                 onChange={(e) => setNewDeliverableType(e.target.value)}
                 placeholder="e.g. Teaser, Cinematic Trailer"
               />
+            </div>
+            <div>
+              <Label htmlFor="newDeliverableCategory">Category</Label>
+              <Select value={newDeliverableCategory} onValueChange={setNewDeliverableCategory}>
+                <SelectTrigger id="newDeliverableCategory"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {deliverableCategories.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <Button type="submit" disabled={savingDeliverable}>
               {savingDeliverable ? "Adding..." : "Add"}
