@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { IndianRupee, TrendingUp, AlertTriangle, Wallet, CheckCircle2 } from "lucide-react";
+import { IndianRupee, TrendingUp, AlertTriangle, Wallet } from "lucide-react";
 import { formatINR } from "@/lib/dashboardFinance";
 
 export default function FinanceOverview({ finance, loading, fyLabelText }) {
@@ -21,11 +21,9 @@ export default function FinanceOverview({ finance, loading, fyLabelText }) {
     outstanding,
     cashReceived,
     monthly,
-    wagesDue,
   } = finance;
 
   const collectedPct = totalRevenue > 0 ? Math.round((receivedOnBookings / totalRevenue) * 100) : 0;
-  const wagesTotal = wagesDue.reduce((s, w) => s + w.amount, 0);
 
   return (
     <div className="flex flex-col gap-3 sm:gap-4">
@@ -60,8 +58,8 @@ export default function FinanceOverview({ finance, loading, fyLabelText }) {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+      <div className="grid grid-cols-1 gap-3 sm:gap-4">
+        <Card>
           <CardContent className="p-3 sm:p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payments Received</p>
             <p className="font-heading text-lg font-semibold text-foreground">Last 6 months</p>
@@ -90,38 +88,6 @@ export default function FinanceOverview({ finance, loading, fyLabelText }) {
                     <Area type="monotone" dataKey="amount" stroke="var(--accent)" strokeWidth={2} fill="url(#paymentsGradient)" />
                   </AreaChart>
                 </ResponsiveContainer>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3 sm:p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Team Wages Due</p>
-            <p className="font-heading text-lg font-semibold text-foreground">Who you owe</p>
-            <div className="mt-3">
-              {loading ? (
-                <p className="text-sm text-muted-foreground">Loading…</p>
-              ) : wagesDue.length === 0 ? (
-                <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" /> All wages paid
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {wagesDue.slice(0, 5).map((w, i) => (
-                    <div key={i} className="flex items-center justify-between gap-2 text-sm">
-                      <span className="truncate text-foreground">{w.personName}</span>
-                      <span className="shrink-0 font-medium text-foreground">{formatINR(w.amount)}</span>
-                    </div>
-                  ))}
-                  {wagesDue.length > 5 && (
-                    <p className="text-xs text-muted-foreground">+{wagesDue.length - 5} more</p>
-                  )}
-                  <div className="mt-1 flex items-center justify-between border-t border-border pt-2 text-sm font-semibold">
-                    <span>Total</span>
-                    <span>{formatINR(wagesTotal)}</span>
-                  </div>
-                </div>
               )}
             </div>
           </CardContent>
