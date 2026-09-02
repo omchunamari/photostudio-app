@@ -18,6 +18,11 @@ import {
 import { createEvent, getEventsForProject, sumEventTeamCost, updateEventTeam } from "@/lib/firebase/events";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import {
+  ensureDeliverablesForProject,
+  addDeliverable,
+  deleteDeliverable,
+} from "@/lib/firebase/deliverables";
+import {
   getInvoicesForProject,
   createInvoice,
   setInvoiceStatus,
@@ -110,6 +115,11 @@ function ProjectDetailContent() {
 
   const [project, setProject] = useState(null);
   const [events, setEvents] = useState([]);
+  const [deliverables, setDeliverables] = useState([]);
+  const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
+  const [newDeliverableType, setNewDeliverableType] = useState("");
+  const [savingDeliverable, setSavingDeliverable] = useState(false);
+  const [deletingDeliverableId, setDeletingDeliverableId] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -181,6 +191,16 @@ function ProjectDetailContent() {
       const evts = await getEventsForProject(id);
       setEvents(evts);
 
+      try {
+        // Same starter-set-on-first-view pattern used by the
+        // Post-Production page — deliverables live in a subcollection so
+        // they stay in sync between both pages automatically.
+        const dels = await ensureDeliverablesForProject(p);
+        setDeliverables(dels);
+      } catch (err) {
+        toast.error(`Failed loading deliverables: ${err.message}`);
+      }
+
       if (isAdminOrPM) {
         try {
           const emps = await getAllEmployees();
@@ -235,6 +255,46 @@ function ProjectDetailContent() {
       toast.error(err.message);
     } finally {
       setSavingDetails(false);
+    }
+  }
+
+  // Add/remove deliverables from the project page. Assignment, dates, and
+  // deadlines are intentionally NOT editable here — those stay Post-
+  // Production-only, matching firestore.rules (only isProjectOps() can
+  // create/delete a deliverable, and updateDeliverable's assignedUid/date
+  // fields are only ever sent from the Post-Production dialog).
+  async function handleAddDeliverable(e) {
+    e.preventDefault();
+    if (!newDeliverableType.trim()) {
+      toast.error("Name this deliverable");
+      return;
+    }
+    setSavingDeliverable(true);
+    try {
+      await addDeliverable(project, newDeliverableType.trim());
+      toast.success("Deliverable added");
+      setAddDeliverableOpen(false);
+      setNewDeliverableType("");
+      const dels = await ensureDeliverablesForProject(project);
+      setDeliverables(dels);
+    } catch (err) {
+      toast.error(err.message || "Failed to add deliverable");
+    } finally {
+      setSavingDeliverable(false);
+    }
+  }
+
+  async function handleDeleteDeliverable(d) {
+    if (!confirm(`Remove "${d.type}"?`)) return;
+    setDeletingDeliverableId(d.id);
+    try {
+      await deleteDeliverable(id, d.id);
+      setDeliverables((prev) => prev.filter((row) => row.id !== d.id));
+      toast.success("Deliverable removed");
+    } catch (err) {
+      toast.error(err.message || "Failed to remove deliverable");
+    } finally {
+      setDeletingDeliverableId(null);
     }
   }
 
@@ -1066,6 +1126,59 @@ function ProjectDetailContent() {
             )}
           </div>
 
+          {/* --- Deliverables ---
+              Mirrors the same subcollection shown on the Post-Production
+              page, so anything added/removed here shows up there too (and
+              vice versa). Assignment, dates, and deadlines are read-only
+              here — set those from Post-Production. */}
+          <div>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-base font-medium text-slate-900 sm:text-lg">Deliverables</h3>
+              {isAdminOrPM && (
+                <Button size="sm" variant="secondary" onClick={() => setAddDeliverableOpen(true)}>
+                  <Plus className="h-4 w-4" /> Add Deliverable
+                </Button>
+              )}
+            </div>
+            {deliverables.length === 0 ? (
+              <p className="text-sm text-slate-500">No deliverables yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {deliverables.map((d) => (
+                  <Card key={d.id}>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-slate-900">{d.type}</p>
+                        <p className="truncate text-xs text-slate-500">
+                          {d.assignedName ? `Assigned to ${d.assignedName}` : "Unassigned"}
+                          {d.deadline ? ` · Due ${d.deadline}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <StatusBadge status={d.status} />
+                        {isAdminOrPM && (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            title="Remove deliverable"
+                            disabled={deletingDeliverableId === d.id}
+                            onClick={() => handleDeleteDeliverable(d)}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 text-xs text-slate-400">
+              Assignment, dates, and deadlines are set from the Post-Production page.
+            </p>
+          </div>
+
           {/* --- Other Expenses --- */}
           {isAdminOrPM && (
             <Card>
@@ -1258,6 +1371,29 @@ function ProjectDetailContent() {
           }}
         />
       )}
+
+      <Dialog open={addDeliverableOpen} onOpenChange={setAddDeliverableOpen}>
+        <DialogContent className="w-[95vw] max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Deliverable</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleAddDeliverable} className="flex flex-col gap-4">
+            <div>
+              <Label htmlFor="newDeliverableType">Name</Label>
+              <Input
+                id="newDeliverableType"
+                autoFocus
+                value={newDeliverableType}
+                onChange={(e) => setNewDeliverableType(e.target.value)}
+                placeholder="e.g. Teaser, Cinematic Trailer"
+              />
+            </div>
+            <Button type="submit" disabled={savingDeliverable}>
+              {savingDeliverable ? "Adding..." : "Add"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }
