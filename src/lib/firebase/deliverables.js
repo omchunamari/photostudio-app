@@ -2,6 +2,7 @@ import {
   collection,
   collectionGroup,
   doc,
+  getDoc,
   getDocs,
   query,
   where,
@@ -9,8 +10,10 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  setDoc,
   writeBatch,
   arrayUnion,
+  runTransaction,
 } from "firebase/firestore";
 import { db } from "./client";
 import { getAllProjects } from "./projects";
@@ -19,6 +22,7 @@ import { getAllProjects } from "./projects";
  * Deliverable doc shape (projects/{projectId}/deliverables/{deliverableId}):
  * {
  *   type: string,              // one of DELIVERABLE_TYPES, or a custom label
+ *   category: string,          // one of DEFAULT_DELIVERABLE_CATEGORIES or an org's custom category — see below
  *   status: string,            // one of DELIVERABLE_STATUSES
  *   projectId, projectName, clientName: string,  // denormalized, for org-wide queries
  *   assignedUid: string | null,
@@ -46,11 +50,102 @@ export const DELIVERABLE_TYPES = [
   "Albums",
 ];
 
+// Default category each starter type is filed under when a project's fixed
+// set is first created — just a sensible starting point, editable per
+// deliverable afterwards like any other field.
+const DELIVERABLE_TYPE_DEFAULT_CATEGORY = {
+  "Raw Photos": "Photography",
+  "Trailer": "Videography",
+  "Reels": "Videography",
+  "Full Film": "Videography",
+  "Photo Selection": "Photography",
+  "Photo Editing": "Photography",
+  "Album Designing": "Album",
+  "Albums": "Album",
+};
+
 export const DELIVERABLE_STATUSES = ["Pending", "In Progress", "Done"];
 
+// --- Deliverable categories -------------------------------------------
+// Fixed defaults — always available, cannot be removed via Manage
+// Categories. Org-added custom categories are layered on top, mirroring
+// the expense-category pattern in expenses.js.
+export const DEFAULT_DELIVERABLE_CATEGORIES = ["Photography", "Videography", "Album", "Other"];
+
+// Org-wide custom deliverable categories, stored alongside the other
+// org-wide config in orgSettings/main (see expenses.js/quoteSettings.js).
+// Kept as a simple string array — "Add" is just an array-union-style write,
+// no separate collection needed for a short list of labels.
+const ORG_SETTINGS_REF = () => doc(db, "orgSettings", "main");
+
+export async function getCustomDeliverableCategories() {
+  const snap = await getDoc(ORG_SETTINGS_REF());
+  const custom = snap.exists() ? snap.data().customDeliverableCategories : [];
+  return Array.isArray(custom) ? custom : [];
+}
+
+/** Full list shown in pickers: fixed defaults + org's custom categories. */
+export async function getAllDeliverableCategories() {
+  const custom = await getCustomDeliverableCategories();
+  return [...DEFAULT_DELIVERABLE_CATEGORIES, ...custom];
+}
+
+export async function addCustomDeliverableCategory(name) {
+  const trimmed = (name || "").trim();
+  if (!trimmed) throw new Error("Category name is required");
+  if (DEFAULT_DELIVERABLE_CATEGORIES.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+    throw new Error("That category already exists");
+  }
+  const existing = await getCustomDeliverableCategories();
+  if (existing.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+    throw new Error("That category already exists");
+  }
+  const next = [...existing, trimmed];
+  await setDoc(ORG_SETTINGS_REF(), { customDeliverableCategories: next, updatedAt: new Date().toISOString() }, { merge: true });
+  return next;
+}
+
+export async function removeCustomDeliverableCategory(name) {
+  const existing = await getCustomDeliverableCategories();
+  const next = existing.filter((c) => c !== name);
+  await setDoc(ORG_SETTINGS_REF(), { customDeliverableCategories: next, updatedAt: new Date().toISOString() }, { merge: true });
+  return next;
+}
+
+/**
+ * Creates the fixed starter set of deliverables for a project the first
+ * time anyone views it. Guarded by a transactional "claim" on the project
+ * doc (deliverablesInitialized) so that concurrent callers — e.g. two
+ * pages loading this project around the same time, or React StrictMode's
+ * double-effect in dev — can't both pass the "is it empty?" check before
+ * either has written, which used to create the starter set twice. Only
+ * the caller that wins the transaction writes the batch; everyone else
+ * just reads (waiting briefly if the winner hasn't committed yet).
+ */
 export async function ensureDeliverablesForProject(project) {
   const existing = await getDeliverablesForProject(project.id);
   if (existing.length > 0) return existing;
+
+  const projectRef = doc(db, "projects", project.id);
+  const wonClaim = await runTransaction(db, async (tx) => {
+    const snap = await tx.get(projectRef);
+    if (snap.exists() && snap.data().deliverablesInitialized) {
+      return false;
+    }
+    tx.update(projectRef, { deliverablesInitialized: true });
+    return true;
+  });
+
+  if (!wonClaim) {
+    // Someone else is (or already did) create the starter set. Poll
+    // briefly for their batch to land instead of creating our own.
+    for (let i = 0; i < 5; i++) {
+      const dels = await getDeliverablesForProject(project.id);
+      if (dels.length > 0) return dels;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return getDeliverablesForProject(project.id);
+  }
 
   const now = new Date().toISOString();
   const batch = writeBatch(db);
@@ -60,6 +155,7 @@ export async function ensureDeliverablesForProject(project) {
     const ref = doc(colRef);
     const data = {
       type,
+      category: DELIVERABLE_TYPE_DEFAULT_CATEGORY[type] || "Other",
       status: "Pending",
       projectId: project.id,
       projectName: project.projectName || "",
@@ -165,10 +261,11 @@ export async function addDeliverableStatusUpdate(projectId, deliverableId, { sta
   await updateDoc(doc(db, "projects", projectId, "deliverables", deliverableId), payload);
 }
 
-export async function addDeliverable(project, type) {
+export async function addDeliverable(project, type, category) {
   const now = new Date().toISOString();
   const ref = await addDoc(collection(db, "projects", project.id, "deliverables"), {
     type,
+    category: category || "Other",
     status: "Pending",
     projectId: project.id,
     projectName: project.projectName || "",
