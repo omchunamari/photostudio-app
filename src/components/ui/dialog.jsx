@@ -14,9 +14,24 @@ function Dialog({
 }
 
 function DialogTrigger({
+  asChild,
+  children,
   ...props
 }) {
-  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />;
+  if (asChild) {
+    return (
+      <DialogPrimitive.Trigger
+        data-slot="dialog-trigger"
+        render={children}
+        {...props}
+      />
+    );
+  }
+  return (
+    <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props}>
+      {children}
+    </DialogPrimitive.Trigger>
+  );
 }
 
 function DialogPortal({

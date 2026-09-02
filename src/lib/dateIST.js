@@ -25,3 +25,12 @@ export function getISTDay(date = new Date()) {
   const istDate = new Date(date.getTime() + IST_OFFSET_MS);
   return istDate.getUTCDay();
 }
+
+/**
+ * Returns the day-of-week (0 = Sunday ... 6 = Saturday) for a "YYYY-MM-DD"
+ * date string, anchored at IST noon so it's immune to the browser/server's
+ * local timezone shifting it to the previous or next day.
+ */
+export function getISTDayFromDateStr(dateStr) {
+  return getISTDay(new Date(`${dateStr}T12:00:00+05:30`));
+}

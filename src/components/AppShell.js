@@ -3,34 +3,57 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import AvatarInitials from "@/components/ui/avatar-initials";
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   Users,
+  UserRound,
   Clock,
   Calendar,
+  CalendarRange,
+  CalendarDays,
   Monitor,
+  BarChart3,
+  FolderKanban,
+  Target,
+  Clapperboard,
   LogOut,
   Menu,
   X,
+  Settings,
 } from "lucide-react";
 
-// v1 scope: only these modules are active. Other pages/files (leads, projects,
-// teams, editor-teams, notifications, my-projects) still exist in the codebase
-// but are intentionally left out of navigation for the first client release.
+// v1 scope: only these modules are active. Other pages/files (teams,
+// editor-teams, notifications) still exist in the codebase but are
+// intentionally left out of navigation for the first client release.
+// Freelancers, Projects (incl. Project Leader assignment), and Leads
+// (incl. Quotations) are the modules of the ongoing revamp turned back on.
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: null },
+  { label: "Leads", href: "/leads", icon: Target, roles: ["super_admin", "admin", "project_manager"] },
+  // Visible to everyone: admins/PMs get the full project list, everyone
+  // else only sees projects they've been assigned as Project Leader on.
+  { label: "Projects", href: "/projects", icon: FolderKanban, roles: null },
+  { label: "Assignments", href: "/my-projects", icon: FolderKanban, roles: null, excludeRoles: ["super_admin", "admin"] },
+  // { label: "Events", href: "/events", icon: CalendarDays, roles: ["super_admin", "admin", "project_manager"] },
+  { label: "Post-Production", href: "/post-production", icon: Clapperboard, roles: null },
+  { label: "Calendar", href: "/calendar", icon: CalendarRange, roles: null },
   { label: "Leave", href: "/leave", icon: Calendar, roles: null },
   { label: "Attendance", href: "/attendance", icon: Clock, roles: ["super_admin", "admin", "hr"] },
   { label: "Employees", href: "/employees", icon: Users, roles: ["super_admin", "admin", "hr"] },
+  { label: "Freelancers", href: "/freelancers", icon: UserRound, roles: ["super_admin", "admin", "project_manager"] },
+  { label: "Analytics", href: "/analytics", icon: BarChart3, roles: ["super_admin", "admin", "project_manager"] },
   { label: "Devices", href: "/devices", icon: Monitor, roles: ["super_admin", "admin"] },
+  { label: "Settings", href: "/settings", icon: Settings, roles: ["super_admin", "admin", "project_manager"] },
 ];
 
 export default function AppShell({ children }) {
   const { user, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
 
   const visibleNavItems = NAV_ITEMS.filter((item) => {
     if (item.roles) return item.roles.includes(user?.role);
@@ -39,15 +62,17 @@ export default function AppShell({ children }) {
   });
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="flex min-h-screen bg-background">
       {/* Mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 md:hidden">
-        <Button variant="ghost" size="sm" onClick={() => setMobileOpen(true)}>
+      <div className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between border-b border-sidebar-border bg-sidebar px-4 md:hidden">
+        <Button variant="ghost" size="sm" onClick={() => setMobileOpen(true)} className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
           <Menu className="h-5 w-5" />
         </Button>
         <div className="flex items-center gap-2">
-          <Image src="/logo.png" alt="The Rolling Stories" width={20} height={20} className="h-5 w-5 object-contain" />
-          <h1 className="text-sm font-bold text-slate-900">The Rolling Stories</h1>
+          <div className="aperture-ring rounded-full">
+            <Image src="/logo-light.png" alt="The Rolling Stories" width={20} height={20} className="h-5 w-5 object-contain" />
+          </div>
+          <h1 className="font-heading text-sm font-semibold text-sidebar-foreground">The Rolling Stories</h1>
         </div>
         <div className="w-8" />
       </div>
@@ -62,20 +87,22 @@ export default function AppShell({ children }) {
 
       {/* Sidebar — fixed drawer on mobile, static column on desktop */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-60 shrink-0 border-r border-slate-200 bg-white p-4 flex flex-col transition-transform duration-200 md:static md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-60 shrink-0 border-r border-sidebar-border bg-sidebar p-4 flex flex-col transition-transform duration-200 md:static md:translate-x-0 ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="mb-6 flex items-center justify-between px-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <Image src="/logo.png" alt="The Rolling Stories" width={28} height={28} className="h-7 w-7 shrink-0 object-contain" />
-            <h1 className="truncate text-base font-bold text-slate-900">The Rolling Stories</h1>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="aperture-ring rounded-full shrink-0">
+              <Image src="/logo-light.png" alt="The Rolling Stories" width={28} height={28} className="h-7 w-7 object-contain" />
+            </div>
+            <h1 className="truncate font-heading text-base font-semibold text-sidebar-foreground">The Rolling Stories</h1>
           </div>
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
-              className="md:hidden"
+              className="md:hidden text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               onClick={() => setMobileOpen(false)}
             >
               <X className="h-5 w-5" />
@@ -83,25 +110,35 @@ export default function AppShell({ children }) {
           </div>
         </div>
         <nav className="flex flex-col gap-1 flex-1">
-          {visibleNavItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setMobileOpen(false)}
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          ))}
+          {visibleNavItems.map((item) => {
+            const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileOpen(false)}
+                className={`relative flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                }`}
+              >
+                {isActive && (
+                  <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-sidebar-primary" />
+                )}
+                <item.icon className={`h-4 w-4 ${isActive ? "text-sidebar-primary" : ""}`} />
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
-        <div className="flex items-center gap-2 border-t border-slate-200 pt-4">
+        <div className="flex items-center gap-2 border-t border-sidebar-border pt-4">
           <AvatarInitials name={user?.name} size="sm" />
           <div className="flex-1 min-w-0">
-            <p className="truncate text-sm font-medium text-slate-900">{user?.name}</p>
-            <p className="truncate text-xs text-slate-500 capitalize">{user?.role?.replace("_", " ")}</p>
+            <p className="truncate text-sm font-medium text-sidebar-foreground">{user?.name}</p>
+            <p className="truncate text-xs text-sidebar-foreground/60 capitalize">{user?.role?.replace("_", " ")}</p>
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} title="Logout">
+          <Button variant="ghost" size="sm" onClick={logout} title="Logout" className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>

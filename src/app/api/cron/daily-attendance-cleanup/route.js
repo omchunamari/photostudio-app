@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { STANDARD_WORKING_HOURS, WEEKLY_OFF_DAY } from "@/lib/constants/attendance";
 import { getISTDateStr, getISTYesterdayStr, getISTDay } from "@/lib/dateIST";
+import { isHolidayDate } from "@/lib/holidays";
 
 export async function GET(request) {
   const authHeader = request.headers.get("authorization");
@@ -45,7 +46,15 @@ export async function GET(request) {
   const yesterdayIST = new Date(`${yesterdayStr}T12:00:00+05:30`);
   let autoDeductedNoReportCount = 0;
 
-  if (getISTDay(yesterdayIST) !== WEEKLY_OFF_DAY) {
+  // Org-wide yearly fixed holidays (e.g. Republic Day, Independence Day) —
+  // stored on orgSettings/main and skipped here for the same reason the
+  // weekly off day is: no attendance/report is expected, so nothing should
+  // be auto-deducted for missing either.
+  const orgSettingsSnap = await adminDb.collection("orgSettings").doc("main").get();
+  const orgHolidays = orgSettingsSnap.exists ? orgSettingsSnap.data().holidays || [] : [];
+  const yesterdayIsHoliday = isHolidayDate(yesterdayStr, orgHolidays);
+
+  if (getISTDay(yesterdayIST) !== WEEKLY_OFF_DAY && !yesterdayIsHoliday) {
     const activeUsersSnap = await adminDb.collection("users").where("status", "==", "active").get();
 
     for (const userDoc of activeUsersSnap.docs) {
@@ -123,5 +132,6 @@ export async function GET(request) {
     autoDeductedCount,
     autoDeductedNoReportCount,
     date: todayStr,
+    yesterdaySkippedForHoliday: yesterdayIsHoliday,
   });
 }

@@ -17,8 +17,14 @@ export async function createProject(data, createdByUid) {
   const now = new Date().toISOString();
   const ref = await addDoc(collection(db, "projects"), {
     projectName: data.projectName,
-    leadId: data.leadId,
-    quotationId: data.quotationId,
+    // Standalone projects (created directly from the Projects list rather
+    // than via "Convert to Project" on a lead) have no lead — must fall
+    // back to null since Firestore's addDoc rejects `undefined` fields.
+    leadId: data.leadId ?? null,
+    // Firestore's addDoc rejects any field whose value is `undefined`, so
+    // this must never be left as data.quotationId directly — always fall
+    // back to null when no quote was passed in.
+    quotationId: data.quotationId ?? null,
     clientName: data.clientName,
     eventDate: data.eventDate || null,
     shootDays: data.shootDays || 1,
@@ -26,6 +32,13 @@ export async function createProject(data, createdByUid) {
     paymentTerms: data.paymentTerms || "",
     quotationAmount: data.quotationAmount || 0,
     status: "Planning",
+    // Project Leader: any employee can be assigned to lead a specific
+    // project. Once set, that employee gets access scoped to only this
+    // project (see firestore.rules and the access checks in
+    // projects/[id]/page.js and events/[eventId]/page.js) — they don't see
+    // or edit other projects. null until an admin/PM assigns one.
+    leaderUid: data.leaderUid || null,
+    leaderName: data.leaderName || null,
     createdBy: createdByUid,
     createdAt: now,
     updatedAt: now,
@@ -48,6 +61,38 @@ export async function getProjectByQuotationId(quotationId) {
   const q = query(collection(db, "projects"), where("quotationId", "==", quotationId));
   const snap = await getDocs(q);
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+// "Convert to Project" on the lead is independent of any single quote's
+// status now (quotes just track draft/sent/accepted/declined/expired for
+// the client-facing side) — this looks up a project by lead directly.
+export async function getProjectByLeadId(leadId) {
+  const q = query(collection(db, "projects"), where("leadId", "==", leadId));
+  const snap = await getDocs(q);
+  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+/** Projects a given employee currently leads. Used to scope a Project Leader's own view. */
+export async function getProjectsForLeader(uid) {
+  const q = query(
+    collection(db, "projects"),
+    where("leaderUid", "==", uid),
+    orderBy("createdAt", "desc")
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * Sets (or clears, by passing null) the Project Leader for a project.
+ * Admin/PM only (enforced in firestore.rules + hidden in UI for others).
+ */
+export async function setProjectLeader(id, leaderUid, leaderName) {
+  await updateDoc(doc(db, "projects", id), {
+    leaderUid: leaderUid || null,
+    leaderName: leaderName || null,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export async function updateProjectStatus(id, status) {

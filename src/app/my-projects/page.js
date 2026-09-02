@@ -1,39 +1,62 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { getEventsForEmployee } from "@/lib/firebase/events";
+import { isEventPast } from "@/lib/status";
 import { Card, CardContent } from "@/components/ui/card";
 import StatusBadge from "@/components/ui/status-badge";
 
+// Super admin/admin manage every project via Team Assignment already — "My
+// Projects" (events assigned to *you personally*) isn't meaningful for
+// them, so they're redirected out even if they land here directly by URL.
+const HIDDEN_ROLES = ["super_admin", "admin"];
+
 function MyProjectsContent() {
   const { user } = useAuth();
-  const [projects, setProjects] = useState([]); // [{ projectId, projectName, clientName, events: [...] }]
+  const router = useRouter();
+  const [allEvents, setAllEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("active"); // "active" | "past"
 
   useEffect(() => {
+    if (HIDDEN_ROLES.includes(user.role)) {
+      router.replace("/dashboard");
+      return;
+    }
     getEventsForEmployee(user.uid)
-      .then((events) => {
-        const byProject = {};
-        events.forEach((ev) => {
-          if (!byProject[ev.projectId]) {
-            byProject[ev.projectId] = {
-              projectId: ev.projectId,
-              projectName: ev.projectName,
-              clientName: ev.clientName,
-              events: [],
-            };
-          }
-          byProject[ev.projectId].events.push(ev);
-        });
-        setProjects(Object.values(byProject));
-      })
+      .then(setAllEvents)
       .finally(() => setLoading(false));
-  }, [user.uid]);
+  }, [user.uid, user.role, router]);
+
+  // Group by project, but only using events that match the active tab —
+  // a project you're on drops out of "Active" once every event of yours
+  // on it is past, and appears in "Past" once at least one of yours is.
+  const projects = useMemo(() => {
+    const events = allEvents.filter((ev) => (tab === "past" ? isEventPast(ev) : !isEventPast(ev)));
+    const byProject = {};
+    events.forEach((ev) => {
+      if (!byProject[ev.projectId]) {
+        byProject[ev.projectId] = {
+          projectId: ev.projectId,
+          projectName: ev.projectName,
+          clientName: ev.clientName,
+          events: [],
+        };
+      }
+      byProject[ev.projectId].events.push(ev);
+    });
+    return Object.values(byProject);
+  }, [allEvents, tab]);
+
+  if (HIDDEN_ROLES.includes(user.role)) {
+    return null;
+  }
 
   if (loading) {
     return (
@@ -45,10 +68,31 @@ function MyProjectsContent() {
 
   return (
     <AppShell>
-      <h2 className="mb-6 text-xl font-semibold text-slate-900 sm:text-2xl">My Projects</h2>
+      <h2 className="mb-4 text-xl font-semibold text-slate-900 sm:text-2xl">My Projects</h2>
+
+      <div className="mb-6 flex gap-1 rounded-md bg-slate-100 p-1 w-fit">
+        {[
+          { id: "active", label: "Active" },
+          { id: "past", label: "Past" },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`rounded px-3 py-1.5 text-sm font-medium transition ${
+              tab === t.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
       {projects.length === 0 ? (
-        <p className="text-sm text-slate-500">You're not currently assigned to any project.</p>
+        <p className="text-sm text-slate-500">
+          {tab === "past"
+            ? "No past projects yet."
+            : "You're not currently assigned to any active project."}
+        </p>
       ) : (
         <div className="grid max-w-2xl gap-3">
           {projects.map((p) => (

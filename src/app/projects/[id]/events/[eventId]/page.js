@@ -15,11 +15,11 @@ import {
   getConflictingEvents,
   getAllStatusUpdatesForEvent,
 } from "@/lib/firebase/events";
+import { getProjectById } from "@/lib/firebase/projects";
 import { getAllEmployees } from "@/lib/firebase/employees";
-import { getAllEditorTeams } from "@/lib/firebase/editorTeams";
+import { getAllFreelancers } from "@/lib/firebase/freelancers";
 import { notifyEmployee } from "@/lib/firebase/notifications";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
-import AssignEditorTeamButton from "@/components/AssignEditorTeamButton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,26 +44,37 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
+import AvatarInitials from "@/components/ui/avatar-initials";
 import { toast } from "sonner";
-import { ArrowLeft, AlertTriangle, X, Trash2, Users2 } from "lucide-react";
+import { ArrowLeft, AlertTriangle, X, Trash2, Users2, CalendarDays, MessageSquare, Banknote } from "lucide-react";
 
 const SHOOT_ROLES = ["photographer", "videographer", "editor", "data_manager"];
+const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 function EventDetailContent() {
   const { id: projectId, eventId } = useParams();
   const router = useRouter();
   const { user } = useAuth();
+  const isAdminOrPM = ADMIN_ROLES.includes(user.role);
   const canDelete = ["super_admin", "admin"].includes(user.role);
 
   const [event, setEvent] = useState(null);
   const [employees, setEmployees] = useState([]);
+  const [freelancers, setFreelancers] = useState([]);
   const [editorTeamsById, setEditorTeamsById] = useState({}); // teamId -> name, for the "via <team>" badge
   const [loading, setLoading] = useState(true);
   const [conflictMap, setConflictMap] = useState({});
   const [statusUpdates, setStatusUpdates] = useState([]);
-  const [selectedUid, setSelectedUid] = useState("");
+  // Combined picker value is "employee:{uid}" or "freelancer:{id}" so one
+  // Select can offer both pools without id collisions between them.
+  const [selectedKey, setSelectedKey] = useState("");
   const [assignNote, setAssignNote] = useState("");
+  const [assignDayRate, setAssignDayRate] = useState("");
+  const [assignCost, setAssignCost] = useState("");
+  const [assignCostLabel, setAssignCostLabel] = useState("Full Day");
   const [savingTeam, setSavingTeam] = useState(false);
+  const [editingCostUid, setEditingCostUid] = useState(null);
+  const [editingCostValue, setEditingCostValue] = useState("");
   const [deleting, setDeleting] = useState(false);
 
   const [detailsForm, setDetailsForm] = useState({
@@ -72,10 +83,22 @@ function EventDetailContent() {
     eventEndDate: "",
   });
   const [savingDetails, setSavingDetails] = useState(false);
+  const [editingName, setEditingName] = useState(false);
 
   async function loadData() {
     setLoading(true);
     try {
+      // A Project Leader may only manage events under the project they
+      // lead. Check the parent project's leaderUid before showing anything.
+      if (!isAdminOrPM) {
+        const project = await getProjectById(projectId);
+        if (!project || project.leaderUid !== user.uid) {
+          toast.error("You don't have access to this project");
+          router.replace("/projects");
+          return;
+        }
+      }
+
       const ev = await getEventById(projectId, eventId);
       setEvent(ev);
       if (ev) {
@@ -87,23 +110,29 @@ function EventDetailContent() {
 
         try {
           const emps = await getAllEmployees();
-          setEmployees(emps.filter((e) => SHOOT_ROLES.includes(e.role)));
+          setEmployees(emps.filter((e) => SHOOT_ROLES.includes(e.role) && e.status === "active"));
         } catch (err) {
           toast.error(`Failed loading employees: ${err.message}`);
         }
 
         try {
-          const teams = await getAllEditorTeams();
-          setEditorTeamsById(Object.fromEntries(teams.map((t) => [t.id, t.name])));
+          const fls = await getAllFreelancers();
+          setFreelancers(fls.filter((f) => f.status === "active"));
         } catch (err) {
-          toast.error(`Failed loading editor teams: ${err.message}`);
+          toast.error(`Failed loading freelancers: ${err.message}`);
         }
 
-        try {
-          const conflicts = await getConflictingEvents(ev.eventStartDate, ev.eventEndDate, ev.id);
-          setConflictMap(conflicts);
-        } catch (err) {
-          toast.error(`Failed loading conflicts: ${err.message}`);
+        // Conflict-checking scans every project's events, which is
+        // intentionally admin/PM-only data (a Project Leader can't see
+        // other projects' schedules) — skip it for leaders rather than
+        // let it fail with a permission error.
+        if (isAdminOrPM) {
+          try {
+            const conflicts = await getConflictingEvents(ev.eventStartDate, ev.eventEndDate, ev.id);
+            setConflictMap(conflicts);
+          } catch (err) {
+            toast.error(`Failed loading conflicts: ${err.message}`);
+          }
         }
 
         try {
@@ -121,26 +150,46 @@ function EventDetailContent() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, eventId]);
 
-  async function handleSaveDetails(e) {
-    e.preventDefault();
-    if (
-      detailsForm.eventStartDate &&
-      detailsForm.eventEndDate &&
-      detailsForm.eventEndDate < detailsForm.eventStartDate
-    ) {
+  // Prefill the per-assignment day rate with the freelancer's default rate
+  // whenever a freelancer is picked, so it's a one-click "use default" but
+  // still editable per assignment (e.g. a negotiated rate for this project).
+  useEffect(() => {
+    if (!selectedKey) {
+      setAssignDayRate("");
+      return;
+    }
+    const [kind, selId] = selectedKey.split(":");
+    if (kind === "freelancer") {
+      const fl = freelancers.find((f) => f.id === selId);
+      setAssignDayRate(fl?.dayRate ? String(fl.dayRate) : "");
+      setAssignCost(fl?.dayRate ? String(fl.dayRate) : "");
+    } else {
+      setAssignDayRate("");
+      setAssignCost("");
+    }
+    setAssignCostLabel("Full Day");
+  }, [selectedKey, freelancers]);
+
+  async function saveDetails(values, { silent } = {}) {
+    if (values.eventStartDate && values.eventEndDate && values.eventEndDate < values.eventStartDate) {
       toast.error("End date can't be before start date");
+      return;
+    }
+    if (!values.eventName?.trim()) {
+      toast.error("Event name is required");
       return;
     }
     setSavingDetails(true);
     try {
       await updateEventDetails(projectId, eventId, {
-        eventName: detailsForm.eventName,
-        eventStartDate: detailsForm.eventStartDate,
-        eventEndDate: detailsForm.eventEndDate || detailsForm.eventStartDate,
+        eventName: values.eventName,
+        eventStartDate: values.eventStartDate,
+        eventEndDate: values.eventEndDate || values.eventStartDate,
       });
-      toast.success("Event details updated");
+      if (!silent) toast.success("Event details updated");
       loadData();
     } catch (err) {
       toast.error(err.message);
@@ -149,6 +198,10 @@ function EventDetailContent() {
     }
   }
 
+  async function handleSaveDetails(e) {
+    e.preventDefault();
+    await saveDetails(detailsForm);
+  }
   async function handleStatusChange(status) {
     try {
       await updateEventStatus(projectId, eventId, status);
@@ -160,41 +213,98 @@ function EventDetailContent() {
   }
 
   async function handleAddMember() {
-    if (!selectedUid) {
-      toast.error("Select an employee");
+    if (!selectedKey) {
+      toast.error("Select an employee or freelancer");
       return;
     }
-    if (event.team?.some((m) => m.uid === selectedUid)) {
+    const [kind, id] = selectedKey.split(":");
+    if (event.team?.some((m) => m.uid === id)) {
       toast.error("Already assigned to this event");
       return;
     }
     setSavingTeam(true);
     try {
-      const emp = employees.find((e) => e.uid === selectedUid);
       const trimmedNote = assignNote.trim();
-      const newMember = {
-        uid: selectedUid,
-        name: emp.name,
-        role: emp.role,
-        sourceTeamId: null, // individually added, distinct from a bulk team-assign
-        assignments: trimmedNote
-          ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
-          : [],
-      };
+      let newMember;
+      if (kind === "freelancer") {
+        const fl = freelancers.find((f) => f.id === id);
+        newMember = {
+          uid: fl.id,
+          name: fl.name,
+          role: fl.skill,
+          type: "freelancer",
+          sourceTeamId: null,
+          // Per-assignment override of the freelancer's default day rate
+          // (e.g. a negotiated rate for this specific project) — this is
+          // what the Expenses payout suggestion uses, falling back to the
+          // freelancer's profile dayRate only if this wasn't set.
+          dayRate: Number(assignDayRate) || fl.dayRate || 0,
+          // Cost + label used for the project's Team Cost / Net Profit rollup
+          // (e.g. "Full Day ₹10,000"). Independent of dayRate so it can be
+          // set for employees too, not just freelancers.
+          cost: Number(assignCost) || 0,
+          costLabel: assignCostLabel || "Full Day",
+          assignments: trimmedNote
+            ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
+            : [],
+        };
+      } else {
+        const emp = employees.find((e) => e.uid === id);
+        newMember = {
+          uid: emp.uid,
+          name: emp.name,
+          role: emp.role,
+          type: "employee",
+          sourceTeamId: null, // individually added, distinct from a bulk team-assign
+          cost: Number(assignCost) || 0,
+          costLabel: assignCostLabel || "Full Day",
+          assignments: trimmedNote
+            ? [{ text: trimmedNote, addedBy: user.name, addedAt: new Date().toISOString() }]
+            : [],
+        };
+      }
       const newTeam = [...(event.team || []), newMember];
       await updateEventTeam(projectId, eventId, newTeam, event.status);
 
-      await notifyEmployee(selectedUid, {
-        type: "event_assignment",
-        title: `Assigned to ${event.eventName} (${event.projectName})`,
-        message: trimmedNote || "You've been added to this event's team.",
-        projectId,
-        eventId,
-      });
+      // Freelancers have no login account, so there's nothing to notify —
+      // only employees get an in-app notification.
+      if (kind === "employee") {
+        await notifyEmployee(id, {
+          type: "event_assignment",
+          title: `Assigned to ${event.eventName} (${event.projectName})`,
+          message: trimmedNote || "You've been added to this event's team.",
+          projectId,
+          eventId,
+        });
+      }
 
       toast.success("Team member added");
-      setSelectedUid("");
+      setSelectedKey("");
       setAssignNote("");
+      setAssignDayRate("");
+      setAssignCost("");
+      setAssignCostLabel("Full Day");
+      loadData();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingTeam(false);
+    }
+  }
+
+  async function handleUpdateMemberCost(uid, newCost) {
+    const cost = Number(newCost);
+    if (Number.isNaN(cost) || cost < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingTeam(true);
+    try {
+      const newTeam = (event.team || []).map((m) =>
+        m.uid === uid ? { ...m, cost } : m
+      );
+      await updateEventTeam(projectId, eventId, newTeam, event.status);
+      toast.success("Amount updated");
       loadData();
     } catch (err) {
       toast.error(err.message);
@@ -245,8 +355,15 @@ function EventDetailContent() {
     );
   }
 
-  const selectedConflicts = selectedUid ? conflictMap[selectedUid] : null;
-  const selectedEmployee = employees.find((e) => e.uid === selectedUid);
+  const [selectedKind, selectedId] = selectedKey ? selectedKey.split(":") : [null, null];
+  const selectedConflicts = selectedId ? conflictMap[selectedId] : null;
+  const selectedEmployee = employees.find((e) => e.uid === selectedId);
+  const selectedFreelancer = freelancers.find((f) => f.id === selectedId);
+  const selectedLabel = selectedEmployee
+    ? `${selectedEmployee.name} (${selectedEmployee.role})`
+    : selectedFreelancer
+    ? `${selectedFreelancer.name} (${selectedFreelancer.skill}, freelancer)`
+    : null;
   const detailsShootDays =
     detailsForm.eventStartDate && detailsForm.eventEndDate
       ? Math.max(
@@ -261,19 +378,92 @@ function EventDetailContent() {
     <AppShell>
       <button
         onClick={() => router.push(`/projects/${projectId}`)}
-        className="mb-3 flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
+        className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
-        <ArrowLeft className="h-4 w-4" /> Back to {event.projectName}
+        <ArrowLeft className="h-3.5 w-3.5" /> {event.projectName}
       </button>
 
-      <div className="sticky top-0 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white py-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">
-            {event.eventName}
-          </h2>
-          <p className="text-sm text-slate-500">{event.clientName}</p>
+      <div className="sticky top-0 z-10 mb-8 flex flex-col gap-4 border-b border-border bg-background/90 py-5 backdrop-blur supports-[backdrop-filter]:bg-background/75 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="aperture-ring flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+            <CalendarDays className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            {editingName ? (
+              <Input
+                autoFocus
+                value={detailsForm.eventName}
+                onChange={(e) => setDetailsForm((p) => ({ ...p, eventName: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  else if (e.key === "Escape") {
+                    setDetailsForm((p) => ({ ...p, eventName: event.eventName }));
+                    setEditingName(false);
+                  }
+                }}
+                onBlur={() => {
+                  setEditingName(false);
+                  if (detailsForm.eventName.trim() && detailsForm.eventName !== event.eventName) {
+                    saveDetails(detailsForm, { silent: true });
+                  } else {
+                    setDetailsForm((p) => ({ ...p, eventName: event.eventName }));
+                  }
+                }}
+                className="h-auto border-transparent px-1 -mx-1 py-0 font-heading text-2xl font-semibold tracking-tight text-foreground shadow-none focus-visible:border-ring sm:text-[1.75rem]"
+              />
+            ) : (
+              <h2
+                onClick={() => isAdminOrPM && setEditingName(true)}
+                title={isAdminOrPM ? "Click to rename" : undefined}
+                className={`truncate rounded px-1 -mx-1 text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem] ${
+                  isAdminOrPM ? "cursor-text hover:bg-muted" : ""
+                }`}
+              >
+                {event.eventName}
+              </h2>
+            )}
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+              <span>{event.clientName}</span>
+              <span className="text-muted-foreground/50">·</span>
+              <input
+                type="date"
+                value={detailsForm.eventStartDate}
+                disabled={!isAdminOrPM}
+                onChange={(e) => {
+                  const eventStartDate = e.target.value;
+                  const eventEndDate =
+                    detailsForm.eventEndDate && detailsForm.eventEndDate < eventStartDate
+                      ? eventStartDate
+                      : detailsForm.eventEndDate;
+                  const next = { ...detailsForm, eventStartDate, eventEndDate };
+                  setDetailsForm(next);
+                  saveDetails(next, { silent: true });
+                }}
+                className="rounded border-none bg-transparent p-0 text-sm text-muted-foreground [color-scheme:light] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <span className="text-muted-foreground/50">–</span>
+              <input
+                type="date"
+                value={detailsForm.eventEndDate}
+                min={detailsForm.eventStartDate || undefined}
+                disabled={!isAdminOrPM}
+                onChange={(e) => {
+                  const next = { ...detailsForm, eventEndDate: e.target.value };
+                  setDetailsForm(next);
+                  saveDetails(next, { silent: true });
+                }}
+                className="rounded border-none bg-transparent p-0 text-sm text-muted-foreground [color-scheme:light] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              {detailsShootDays > 0 && (
+                <span className="text-muted-foreground/70">
+                  · {detailsShootDays} shoot day{detailsShootDays !== 1 && "s"}
+                </span>
+              )}
+              {savingDetails && <span className="text-muted-foreground/50">Saving…</span>}
+            </div>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:pl-2">
           <StatusBadge status={event.status} />
           <Select value={event.status} onValueChange={handleStatusChange}>
             <SelectTrigger className="h-8 w-36 text-xs sm:w-40"><SelectValue /></SelectTrigger>
@@ -315,89 +505,57 @@ function EventDetailContent() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardContent className="p-4 sm:p-5">
-            <h3 className="mb-3 font-medium text-slate-900">Event Details</h3>
-            <form onSubmit={handleSaveDetails} className="flex flex-col gap-3">
-              <div>
-                <Label htmlFor="eventName">Event Name</Label>
-                <Input
-                  id="eventName"
-                  value={detailsForm.eventName}
-                  onChange={(e) => setDetailsForm((p) => ({ ...p, eventName: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="eventStartDate">Start Date</Label>
-                  <Input
-                    id="eventStartDate"
-                    type="date"
-                    value={detailsForm.eventStartDate}
-                    onChange={(e) =>
-                      setDetailsForm((p) => ({
-                        ...p,
-                        eventStartDate: e.target.value,
-                        eventEndDate:
-                          p.eventEndDate && p.eventEndDate < e.target.value ? e.target.value : p.eventEndDate,
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="eventEndDate">End Date</Label>
-                  <Input
-                    id="eventEndDate"
-                    type="date"
-                    min={detailsForm.eventStartDate || undefined}
-                    value={detailsForm.eventEndDate}
-                    onChange={(e) => setDetailsForm((p) => ({ ...p, eventEndDate: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-slate-500">{detailsShootDays} shoot day{detailsShootDays !== 1 && "s"}</p>
-              <Button type="submit" disabled={savingDetails} className="w-full">
-                {savingDetails ? "Saving..." : "Save Details"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-medium text-slate-900">Team Assignment</h3>
-              <AssignEditorTeamButton
-                projectId={projectId}
-                eventId={eventId}
-                currentTeam={event.team}
-                currentStatus={event.status}
-                addedByName={user.name}
-                onAssigned={loadData}
-              />
+      <div className="grid gap-6">
+        <Card className="overflow-hidden">
+          <CardContent className="p-5 sm:p-6">
+            <div className="mb-5 flex items-center gap-2.5">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/12 text-accent">
+                <Users2 className="h-3.5 w-3.5" />
+              </span>
+              <h3 className="font-heading text-base font-semibold text-foreground">Team Assignment</h3>
+              {(event.team || []).length > 0 && (
+                <span className="ml-auto rounded-full bg-accent/12 px-2.5 py-0.5 text-[11px] font-medium text-accent">
+                  {event.team.length} assigned
+                </span>
+              )}
             </div>
 
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="flex-1">
-                <Label>Employee</Label>
-                <Select value={selectedUid} onValueChange={setSelectedUid}>
+                <Label>Employee or Freelancer</Label>
+                <Select value={selectedKey} onValueChange={setSelectedKey}>
                   <SelectTrigger>
-                    {selectedEmployee
-                      ? `${selectedEmployee.name} (${selectedEmployee.role})`
-                      : <span className="text-slate-400">Select employee</span>}
+                    {selectedLabel || <span className="text-muted-foreground">Select employee or freelancer</span>}
                   </SelectTrigger>
                   <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.uid} value={e.uid}>
-                        {e.name} ({e.role})
-                      </SelectItem>
-                    ))}
+                    {employees.length > 0 && (
+                      <>
+                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Employees
+                        </p>
+                        {employees.map((e) => (
+                          <SelectItem key={`employee:${e.uid}`} value={`employee:${e.uid}`}>
+                            {e.name} ({e.role})
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                    {freelancers.length > 0 && (
+                      <>
+                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Freelancers
+                        </p>
+                        {freelancers.map((f) => (
+                          <SelectItem key={`freelancer:${f.id}`} value={`freelancer:${f.id}`}>
+                            {f.name} ({f.skill})
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
-              <Button onClick={handleAddMember} disabled={savingTeam || !selectedUid} className="w-full sm:w-auto">
+              <Button onClick={handleAddMember} disabled={savingTeam || !selectedKey} className="w-full sm:w-auto">
                 Add
               </Button>
             </div>
@@ -413,6 +571,39 @@ function EventDetailContent() {
               />
             </div>
 
+            {selectedKey && (
+              <div className="mb-3 flex flex-wrap gap-3">
+                <div className="w-32">
+                  <Label htmlFor="assignCostLabel">Rate type</Label>
+                  <Select value={assignCostLabel} onValueChange={setAssignCostLabel}>
+                    <SelectTrigger id="assignCostLabel">{assignCostLabel}</SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Full Day">Full Day</SelectItem>
+                      <SelectItem value="Half Day">Half Day</SelectItem>
+                      <SelectItem value="Fixed">Fixed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-40">
+                  <Label htmlFor="assignCost">Cost for this assignment (₹)</Label>
+                  <Input
+                    id="assignCost"
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 10000"
+                    value={assignCost}
+                    onChange={(e) => setAssignCost(e.target.value)}
+                  />
+                </div>
+                {selectedKind === "freelancer" && (
+                  <p className="w-full text-[11px] text-muted-foreground">
+                    Defaults to their profile day rate — override here for a project-specific rate.
+                    This also feeds the Expenses payout suggestion.
+                  </p>
+                )}
+              </div>
+            )}
+
             {selectedConflicts?.length > 0 && (
               <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -424,46 +615,113 @@ function EventDetailContent() {
             )}
 
             {(event.team || []).length === 0 ? (
-              <p className="text-sm text-slate-500">No team members assigned yet.</p>
+              <div className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border py-8 text-center">
+                <Users2 className="h-5 w-5 text-muted-foreground/50" />
+                <p className="text-sm text-muted-foreground">No team members assigned yet.</p>
+              </div>
             ) : (
-              <div className="grid max-h-56 gap-2 overflow-y-auto pr-1">
+              <div className="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4">
                 {event.team.map((m) => {
                   const latestNote = (m.assignments || []).slice(-1)[0]?.text;
                   const teamName = m.sourceTeamId ? editorTeamsById[m.sourceTeamId] : null;
                   return (
                     <div
                       key={m.uid}
-                      className="flex flex-col gap-1 rounded-md border border-slate-200 p-2 text-sm"
+                      className="group relative flex flex-col gap-1.5 rounded-lg border border-border bg-background/60 p-2.5 text-sm transition-colors hover:border-foreground/20"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1.5 truncate">
-                          {m.name}
-                           {/* — <span className="text-slate-500">{m.role}</span> */}
-                          {m.sourceTeamId ? (
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
-                              <Users2 className="h-3 w-3" /> {teamName || "Team"}
-                            </span>
-                          ) : (
-                            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                              Individual
-                            </span>
+                      <button
+                        onClick={() => handleRemoveMember(m.uid)}
+                        disabled={savingTeam}
+                        className="absolute right-1 top-1 rounded-full bg-background/80 p-1 opacity-100 hover:bg-red-50 sm:bg-transparent sm:p-0.5 sm:opacity-0 sm:group-hover:opacity-100"
+                      >
+                        <X className="h-3.5 w-3.5 text-muted-foreground hover:text-red-600 sm:h-3 sm:w-3" />
+                      </button>
+
+                      <div className="flex items-center gap-2 pr-4">
+                        <AvatarInitials name={m.name} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-foreground" title={m.name}>
+                            {m.name}
+                          </p>
+                          {m.role && (
+                            <p className="truncate text-[10px] text-muted-foreground">{m.role}</p>
                           )}
-                        </span>
-                        <button onClick={() => handleRemoveMember(m.uid)} disabled={savingTeam} className="shrink-0">
-                          <X className="h-4 w-4 text-slate-400 hover:text-red-600" />
-                        </button>
+                        </div>
                       </div>
-                      {latestNote && <p className="text-xs text-slate-500">{latestNote}</p>}
-                      {(m.assignments?.length || 0) > 1 && (
-                        <p className="text-[11px] text-slate-400">
-                          +{m.assignments.length - 1} earlier instruction{m.assignments.length - 1 !== 1 && "s"}
+
+                      <div className="flex flex-wrap items-center gap-1">
+                        {m.type === "freelancer" && (
+                          <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">
+                            Freelancer
+                          </span>
+                        )}
+                        {m.sourceTeamId ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600">
+                            <Users2 className="h-2.5 w-2.5" /> {teamName || "Team"}
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                            Individual
+                          </span>
+                        )}
+                      </div>
+
+                      {editingCostUid === m.uid ? (
+                        <span className="inline-flex w-fit items-center gap-1 rounded-full bg-accent/12 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                          <Banknote className="h-2.5 w-2.5 shrink-0" />
+                          {m.costLabel || "Full Day"} · ₹
+                          <input
+                            autoFocus
+                            type="number"
+                            min="0"
+                            value={editingCostValue}
+                            onChange={(e) => setEditingCostValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              } else if (e.key === "Escape") {
+                                setEditingCostUid(null);
+                              }
+                            }}
+                            onBlur={() => {
+                              setEditingCostUid(null);
+                              if (editingCostValue !== String(m.cost)) {
+                                handleUpdateMemberCost(m.uid, editingCostValue);
+                              }
+                            }}
+                            disabled={savingTeam}
+                            className="w-14 border-b border-accent bg-transparent text-[10px] font-medium text-accent outline-none"
+                          />
+                        </span>
+                      ) : (m.cost > 0 || isAdminOrPM) && (
+                        <button
+                          type="button"
+                          disabled={!isAdminOrPM}
+                          onClick={() => {
+                            if (!isAdminOrPM) return;
+                            setEditingCostValue(String(m.cost || 0));
+                            setEditingCostUid(m.uid);
+                          }}
+                          className={`inline-flex w-fit items-center gap-1 rounded-full bg-accent/12 px-1.5 py-0.5 text-[10px] font-medium text-accent ${
+                            isAdminOrPM ? "hover:bg-accent/20" : ""
+                          }`}
+                          title={isAdminOrPM ? "Click to edit amount" : undefined}
+                        >
+                          <Banknote className="h-2.5 w-2.5" />
+                          {m.costLabel || "Full Day"} · ₹{(m.cost || 0).toLocaleString("en-IN")}
+                        </button>
+                      )}
+
+                      {latestNote && (
+                        <p className="line-clamp-2 text-[10px] text-muted-foreground" title={latestNote}>
+                          {latestNote}
                         </p>
                       )}
-                      {/* {m.sourceTeamId && (
-                        <p className="text-[11px] text-slate-400">
-                          Stays in sync with {teamName || "this team"} — removing them there removes them here too.
+                      {(m.assignments?.length || 0) > 1 && (
+                        <p className="text-[9px] text-muted-foreground/70">
+                          +{m.assignments.length - 1} more note{m.assignments.length - 1 !== 1 && "s"}
                         </p>
-                      )} */}
+                      )}
                     </div>
                   );
                 })}
@@ -473,15 +731,23 @@ function EventDetailContent() {
         </Card>
       </div>
 
-      <Card className="mt-6">
-        <CardContent className="p-4 sm:p-5">
-          <h3 className="mb-1 font-medium text-slate-900">Team Updates</h3>
-          <p className="mb-3 text-xs text-slate-500">
+      <Card className="mt-6 overflow-hidden">
+        <CardContent className="p-5 sm:p-6">
+          <div className="mb-1 flex items-center gap-2.5">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/12 text-accent">
+              <MessageSquare className="h-3.5 w-3.5" />
+            </span>
+            <h3 className="font-heading text-base font-semibold text-foreground">Team Updates</h3>
+          </div>
+          <p className="mb-4 text-xs text-muted-foreground">
             Progress notes reported directly by team members assigned to this event.
           </p>
 
           {statusUpdates.filter((u) => (u.updates || []).length > 0).length === 0 ? (
-            <p className="text-sm text-slate-500">No updates from the team yet.</p>
+            <div className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border py-8 text-center">
+              <MessageSquare className="h-5 w-5 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground">No updates from the team yet.</p>
+            </div>
           ) : (
             <div className="grid max-h-72 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
               {statusUpdates
@@ -489,21 +755,24 @@ function EventDetailContent() {
                 .map((u) => {
                   const latest = u.updates[u.updates.length - 1];
                   return (
-                    <div key={u.uid} className="rounded-md border border-slate-200 p-3 text-sm">
-                      <div className="mb-1 flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
-                        <span className="font-medium text-slate-900">{u.name}</span>
-                        {latest?.updatedAt && (
-                          <span className="text-xs text-slate-400">
-                            {new Date(latest.updatedAt).toLocaleString()}
-                          </span>
+                    <div key={u.uid} className="flex items-start gap-3 rounded-lg border border-border bg-background/60 p-3 text-sm">
+                      <AvatarInitials name={u.name} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="font-medium text-foreground">{u.name}</span>
+                          {latest?.updatedAt && (
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(latest.updatedAt).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-muted-foreground">{latest?.text}</p>
+                        {u.updates.length > 1 && (
+                          <p className="mt-1 text-[11px] text-muted-foreground/70">
+                            +{u.updates.length - 1} earlier update{u.updates.length - 1 !== 1 && "s"}
+                          </p>
                         )}
                       </div>
-                      <p className="text-slate-600">{latest?.text}</p>
-                      {u.updates.length > 1 && (
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          +{u.updates.length - 1} earlier update{u.updates.length - 1 !== 1 && "s"}
-                        </p>
-                      )}
                     </div>
                   );
                 })}
@@ -517,7 +786,7 @@ function EventDetailContent() {
 
 export default function EventDetailPage() {
   return (
-    <ProtectedRoute allowedRoles={["super_admin", "admin", "project_manager"]}>
+    <ProtectedRoute>
       <DeviceGate>
         <EventDetailContent />
       </DeviceGate>

@@ -40,6 +40,33 @@ export async function getPendingCompOffRequests() {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
+/** All comp off requests (any status), optionally scoped to a year — mirrors getAllLeaveRequests. */
+export async function getAllCompOffRequests(year) {
+  if (year) {
+    const start = `${year}-01-01`;
+    const end = `${year}-12-31`;
+    const q = query(
+      collection(db, "compOffRequests"),
+      where("date", ">=", start),
+      where("date", "<=", end)
+    );
+    const snap = await getDocs(q);
+    const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return results.sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+  }
+  const snap = await getDocs(collection(db, "compOffRequests"));
+  const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return results.sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+}
+
+/** A single employee's comp off requests (any status) — mirrors getLeaveHistoryForEmployee. */
+export async function getCompOffHistoryForEmployee(uid) {
+  const q = query(collection(db, "compOffRequests"), where("employeeUid", "==", uid));
+  const snap = await getDocs(q);
+  const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return results.sort((a, b) => (b.requestedAt || "").localeCompare(a.requestedAt || ""));
+}
+
 export async function decideCompOffRequest(requestId, decision, decidedByUid, request) {
   await updateDoc(doc(db, "compOffRequests", requestId), {
     status: decision,

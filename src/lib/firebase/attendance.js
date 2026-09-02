@@ -23,8 +23,34 @@ export async function getTodayAttendance(uid) {
   return snap.exists() ? snap.data() : null;
 }
 
+/**
+ * Checks whether the employee has a pending or approved leave request that
+ * covers the given date. Scoped to the employee's own uid so it satisfies
+ * the same "employeeUid == request.auth.uid" list rule as the rest of the
+ * self-service attendance queries.
+ */
+export async function hasLeaveRequestForDate(uid, dateStr) {
+  const q = query(
+    collection(db, "leaveRequests"),
+    where("employeeUid", "==", uid),
+    where("status", "in", ["pending", "approved"])
+  );
+  const snap = await getDocs(q);
+  return snap.docs.some((d) => {
+    const req = d.data();
+    return req.startDate <= dateStr && dateStr <= req.endDate;
+  });
+}
+
 export async function checkIn(uid, employeeName, department) {
   const now = new Date();
+  const dateStr = getISTDateStr(now);
+  const onLeave = await hasLeaveRequestForDate(uid, dateStr);
+  if (onLeave) {
+    throw new Error(
+      "You have a pending or approved leave request covering today. Cancel it before marking attendance."
+    );
+  }
   const ref = doc(db, "attendance", todayId(uid));
   const record = {
     id: todayId(uid),
