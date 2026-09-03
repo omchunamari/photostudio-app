@@ -28,7 +28,13 @@ export async function hasSubmittedReport(uid, date = getISTDateStr()) {
   return snap.exists();
 }
 
-export async function submitDailyReport({ employeeUid, employeeName, department, report }) {
+export async function submitDailyReport({
+  employeeUid,
+  employeeName,
+  department,
+  report,
+  deliverableUpdates = [],
+}) {
   const date = getISTDateStr();
   const trimmed = (report || "").trim();
   if (!trimmed) throw new Error("Please write something before submitting.");
@@ -46,6 +52,13 @@ export async function submitDailyReport({ employeeUid, employeeName, department,
     department,
     date,
     report: trimmed,
+    // Denormalized summary of any assigned-deliverable updates the
+    // employee made as part of this same submission — see
+    // DailyReportPanel's EmployeeReportForm. The underlying deliverable
+    // docs are updated separately (via addDeliverableStatusUpdate) so they
+    // remain the source of truth elsewhere in the app; this array just
+    // lets the admin report view show them inline without extra queries.
+    deliverableUpdates,
     submittedAt: now,
   });
 }

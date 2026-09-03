@@ -13,10 +13,22 @@ import { getOrgHolidays } from "@/lib/firebase/holidays";
 import { getHolidayForDate, formatMonthDay } from "@/lib/holidays";
 import { getISTDateStr, getISTDayFromDateStr } from "@/lib/dateIST";
 import { WEEKLY_OFF_DAY } from "@/lib/constants/attendance";
+import {
+    getDeliverablesForEmployee,
+    addDeliverableStatusUpdate,
+    DELIVERABLE_STATUSES,
+} from "@/lib/firebase/deliverables";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import {
     Dialog,
     DialogContent,
@@ -54,23 +66,79 @@ function EmployeeReportForm() {
     const [offInfo, setOffInfo] = useState(null);
     const [submitAnyway, setSubmitAnyway] = useState(false);
 
+    // Assigned deliverables the employee can optionally post a status
+    // update against alongside today's report. Keyed by id so edits are
+    // easy to look up and only touched ones get submitted.
+    const [myDeliverables, setMyDeliverables] = useState([]);
+    const [deliverableEdits, setDeliverableEdits] = useState({}); // { [deliverableId]: { status, note } }
+
     useEffect(() => {
-        Promise.all([getTodayReport(user.uid), getOrgHolidays()]).then(([r, holidays]) => {
+        Promise.all([
+            getTodayReport(user.uid),
+            getOrgHolidays(),
+            getDeliverablesForEmployee(user.uid),
+        ]).then(([r, holidays, deliverables]) => {
             setExistingReport(r);
             setOffInfo(getOffInfo(getISTDateStr(), holidays));
+            // Once a deliverable is marked Done, it's off the daily report
+            // for good — nothing left to update.
+            setMyDeliverables(deliverables.filter((d) => d.status !== "Done"));
+            setLoading(false);
+        }).catch((err) => {
+            // Assigned-work list is a nice-to-have on top of the report
+            // itself — don't block report submission if it fails to load.
+            console.error("Failed to load assigned deliverables:", err);
             setLoading(false);
         });
     }, [user.uid]);
+
+    function updateDeliverableEdit(id, patch) {
+        setDeliverableEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+    }
 
     async function handleSubmit(e) {
         e.preventDefault();
         setSubmitting(true);
         try {
+            // Only deliverables whose status was actually changed, or that
+            // got a note, are treated as "touched" — everything else is
+            // left alone.
+            const touchedDeliverables = myDeliverables
+                .map((d) => {
+                    const edit = deliverableEdits[d.id];
+                    if (!edit) return null;
+                    const statusChanged = edit.status && edit.status !== d.status;
+                    const hasNote = edit.note && edit.note.trim();
+                    if (!statusChanged && !hasNote) return null;
+                    return { deliverable: d, status: edit.status || d.status, note: hasNote ? edit.note.trim() : "" };
+                })
+                .filter(Boolean);
+
+            // Write the actual updates first so the report never claims an
+            // update happened that didn't actually land.
+            await Promise.all(
+                touchedDeliverables.map(({ deliverable, status, note }) =>
+                    addDeliverableStatusUpdate(deliverable.projectId, deliverable.id, {
+                        status,
+                        note,
+                        byUid: user.uid,
+                        byName: user.name,
+                    })
+                )
+            );
+
             await submitDailyReport({
                 employeeUid: user.uid,
                 employeeName: user.name,
                 department: user.department,
                 report: text,
+                deliverableUpdates: touchedDeliverables.map(({ deliverable, status, note }) => ({
+                    type: deliverable.type,
+                    category: deliverable.category || "",
+                    projectName: deliverable.projectName || "",
+                    status,
+                    note,
+                })),
             });
             toast.success("Daily report submitted");
             const fresh = await getTodayReport(user.uid);
@@ -102,6 +170,7 @@ function EmployeeReportForm() {
                         <div className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             {existingReport.report}
                         </div>
+                        <ReportUpdatesSummary report={existingReport} className="mt-3" />
                     </>
                 ) : showOffNotice ? (
                     <div className="flex flex-col gap-2">
@@ -121,19 +190,62 @@ function EmployeeReportForm() {
                         </Button>
                     </div>
                 ) : (
-                    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-                        <p className="text-xs text-slate-500">
-                            {offInfo
-                                ? "Summarize what you worked on today."
-                                : "Summarize what you worked on today. You must submit this before you can check out, and skipping it may result in the day being auto-marked as leave."}
-                        </p>
-                        <Textarea
-                            rows={5}
-                            value={text}
-                            onChange={(e) => setText(e.target.value)}
-                            placeholder="What did you work on today?"
-                            required
-                        />
+                    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-3">
+                            <p className="text-xs text-slate-500">
+                                {offInfo
+                                    ? "Summarize what you worked on today."
+                                    : "Summarize what you worked on today. You must submit this before you can check out, and skipping it may result in the day being auto-marked as leave."}
+                            </p>
+                            <Textarea
+                                rows={5}
+                                value={text}
+                                onChange={(e) => setText(e.target.value)}
+                                placeholder="What did you work on today?"
+                                required
+                            />
+                        </div>
+
+                        {myDeliverables.length > 0 && (
+                            <div className="flex flex-col gap-2 rounded-md border border-slate-200 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Your Assigned Deliverables (optional update)
+                                </p>
+                                <div className="flex flex-col gap-3">
+                                    {myDeliverables.map((d) => {
+                                        const edit = deliverableEdits[d.id] || {};
+                                        return (
+                                            <div key={d.id} className="flex flex-col gap-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <p className="text-sm font-medium text-slate-900">
+                                                        {d.type}
+                                                        {d.projectName && <span className="ml-1 font-normal text-slate-500">— {d.projectName}</span>}
+                                                    </p>
+                                                    <Select
+                                                        value={edit.status || d.status}
+                                                        onValueChange={(v) => updateDeliverableEdit(d.id, { status: v })}
+                                                    >
+                                                        <SelectTrigger className="h-8 w-[130px] text-xs"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            {DELIVERABLE_STATUSES.map((s) => (
+                                                                <SelectItem key={s} value={s}>{s}</SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <Input
+                                                    value={edit.note || ""}
+                                                    onChange={(e) => updateDeliverableEdit(d.id, { note: e.target.value })}
+                                                    placeholder="Note on this deliverable (optional)"
+                                                    className="h-8 text-xs"
+                                                />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
                         <Button type="submit" disabled={submitting} className="w-full sm:w-fit">
                             {submitting ? "Submitting..." : "Submit Report"}
                         </Button>
@@ -141,6 +253,27 @@ function EmployeeReportForm() {
                 )}
             </CardContent>
         </Card>
+    );
+}
+
+/** Compact read-only list of any deliverable updates attached to a
+ *  submitted report — shown under the employee's own report, and reused in
+ *  the admin view. */
+function ReportUpdatesSummary({ report, className = "" }) {
+    const deliverableUpdates = report.deliverableUpdates || [];
+    if (deliverableUpdates.length === 0) return null;
+
+    return (
+        <div className={`flex flex-col gap-2 text-xs ${className}`}>
+            {deliverableUpdates.map((u, i) => (
+                <div key={`d${i}`} className="flex flex-wrap items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5">
+                    <span className="rounded-full bg-slate-200 px-2 py-0.5 font-medium text-slate-700">{u.status}</span>
+                    <span className="font-medium text-slate-700">{u.type}</span>
+                    {u.projectName && <span className="text-slate-500">— {u.projectName}</span>}
+                    {u.note && <span className="text-slate-500">· {u.note}</span>}
+                </div>
+            ))}
+        </div>
     );
 }
 
@@ -253,6 +386,7 @@ function AdminReportsView() {
                                                 </p>
                                             </div>
                                             <p className="whitespace-pre-wrap text-sm text-slate-700">{r.report}</p>
+                                            <ReportUpdatesSummary report={r} className="mt-2" />
                                         </button>
                                     ))}
                                 </div>
@@ -325,6 +459,7 @@ function AdminReportsView() {
                                         </p>
                                     </div>
                                     <p className="whitespace-pre-wrap text-sm text-slate-700">{r.report}</p>
+                                    <ReportUpdatesSummary report={r} className="mt-2" />
                                 </div>
                             ))}
                         </div>
