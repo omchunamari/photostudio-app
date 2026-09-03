@@ -70,6 +70,7 @@
     MessageSquare,
     FileText,
     X,
+    ChevronDown,
   } from "lucide-react";
   import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
@@ -982,6 +983,96 @@
     );
   }
 
+  /** Category-wise deliverables table. Instead of a select-box filter that
+   *  hides every other category, this renders one collapsible ("dropdown")
+   *  section per category — each with its own status-grouped table inside —
+   *  so all categories stay reachable at a glance and can be expanded/
+   *  collapsed individually. */
+  function DeliverablesByCategoryTable({
+    deliverables,
+    categoryOrder = [],
+    isAdminView,
+    onEdit,
+    onDelete,
+    onInlineUpdate,
+    people = [],
+    showProject = false,
+    rowsClickable = false,
+    emptyMessage = "No deliverables yet.",
+  }) {
+    const categories = useMemo(() => {
+      const present = new Set(deliverables.map((d) => d.category).filter(Boolean));
+      const ordered = categoryOrder.filter((c) => present.has(c));
+      const extra = Array.from(present).filter((c) => !categoryOrder.includes(c)).sort();
+      const all = [...ordered, ...extra];
+      if (deliverables.some((d) => !d.category)) all.push("Uncategorized");
+      return all;
+    }, [deliverables, categoryOrder]);
+
+    const [openCategories, setOpenCategories] = useState(() => new Set());
+
+    function toggleCategory(c) {
+      setOpenCategories((prev) => {
+        const next = new Set(prev);
+        if (next.has(c)) next.delete(c);
+        else next.add(c);
+        return next;
+      });
+    }
+
+    if (deliverables.length === 0) {
+      return (
+        <Card>
+          <div className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+        </Card>
+      );
+    }
+
+    return (
+      <div className="flex flex-col gap-3">
+        {categories.map((c) => {
+          const rows = deliverables.filter((d) => (d.category || "Uncategorized") === c);
+          const isOpen = openCategories.has(c);
+          return (
+            <Card key={c} className="overflow-hidden">
+              <button
+                type="button"
+                onClick={() => toggleCategory(c)}
+                className="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-muted/50"
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${c === "Uncategorized" ? "bg-muted text-muted-foreground" : categoryColor(c)}`}>
+                    {c}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {rows.length} deliverable{rows.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
+              </button>
+              {isOpen && (
+                <div className="border-t px-0 pb-0 pt-0">
+                  <DeliverablesTable
+                    deliverables={rows}
+                    isAdminView={isAdminView}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                    onInlineUpdate={onInlineUpdate}
+                    people={people}
+                    showProject={showProject}
+                    rowsClickable={rowsClickable}
+                    emptyMessage={emptyMessage}
+                    bare
+                  />
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    );
+  }
+
   function DeliverablesTable({
     deliverables,
     isAdminView,
@@ -992,6 +1083,7 @@
     showProject = false,
     rowsClickable = false,
     emptyMessage = "No deliverables yet.",
+    bare = false,
   }) {
     const grouped = DELIVERABLE_STATUSES.map((status) => ({
       status,
@@ -999,7 +1091,9 @@
     })).filter((g) => g.rows.length > 0);
 
     if (deliverables.length === 0) {
-      return (
+      return bare ? (
+        <div className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+      ) : (
         <Card>
           <div className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>
         </Card>
@@ -1012,7 +1106,7 @@
             on narrow screens — six columns of dates/selects just get
             crushed — so below md we swap to a card-per-deliverable layout
             instead of forcing horizontal scroll. */}
-        <div className="flex flex-col gap-4 md:hidden">
+        <div className={`flex flex-col gap-4 md:hidden ${bare ? "p-3" : ""}`}>
           {grouped.map((group) => (
             <div key={group.status} className="flex flex-col gap-2">
               <p className={`rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${STATUS_GROUP_STYLES[group.status] || "bg-muted text-muted-foreground"}`}>
@@ -1036,7 +1130,7 @@
         </div>
 
         {/* Desktop / tablet: full table. */}
-        <Card className="hidden overflow-x-auto md:block">
+        <div className={`hidden overflow-x-auto md:block ${bare ? "" : "rounded-xl border bg-card"}`}>
           <Table>
             <TableHeader>
               <TableRow>
@@ -1153,7 +1247,7 @@
               ))}
             </TableBody>
           </Table>
-        </Card>
+        </div>
       </>
     );
   }
@@ -1191,7 +1285,6 @@
     const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
     const [manageDeliverableCategoriesOpen, setManageDeliverableCategoriesOpen] = useState(false);
     const [deliverableCategories, setDeliverableCategories] = useState(DEFAULT_DELIVERABLE_CATEGORIES);
-    const [projectDeliverableCategoryFilter, setProjectDeliverableCategoryFilter] = useState("All Categories");
     const [storageContext, setStorageContext] = useState(null);
 
     async function loadDeliverableCategories() {
@@ -1256,7 +1349,6 @@
 
     useEffect(() => {
       if (selectedProjectId) loadProject(selectedProjectId);
-      setProjectDeliverableCategoryFilter("All Categories");
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedProjectId, projects]);
 
@@ -1683,46 +1775,26 @@
 
                   {projectSubTab === "deliverables" ? (
                     <>
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        {projectDeliverables.length > 0 ? (
-                          <Select value={projectDeliverableCategoryFilter} onValueChange={setProjectDeliverableCategoryFilter}>
-                            <SelectTrigger className="h-8 w-[160px] text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="All Categories">All Categories</SelectItem>
-                              {Array.from(new Set(projectDeliverables.map((d) => d.category).filter(Boolean))).map((c) => (
-                                <SelectItem key={c} value={c}>{c}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : <div />}
-                        {isAdminView && (
-                          <div className="flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" onClick={() => setManageDeliverableCategoriesOpen(true)}>
-                              Manage Categories
-                            </Button>
-                            <Button size="sm" onClick={() => setAddDeliverableOpen(true)}>
-                              <Plus className="h-4 w-4" /> Add Deliverable
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                      <DeliverablesTable
-                        deliverables={
-                          projectDeliverableCategoryFilter === "All Categories"
-                            ? projectDeliverables
-                            : projectDeliverables.filter((d) => d.category === projectDeliverableCategoryFilter)
-                        }
+                      {isAdminView && (
+                        <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+                          <Button size="sm" variant="outline" onClick={() => setManageDeliverableCategoriesOpen(true)}>
+                            Manage Categories
+                          </Button>
+                          <Button size="sm" onClick={() => setAddDeliverableOpen(true)}>
+                            <Plus className="h-4 w-4" /> Add Deliverable
+                          </Button>
+                        </div>
+                      )}
+                      <DeliverablesByCategoryTable
+                        deliverables={projectDeliverables}
+                        categoryOrder={deliverableCategories}
                         isAdminView={isAdminView}
                         onEdit={setEditingDeliverable}
                         onDelete={handleDeleteDeliverable}
                         onInlineUpdate={handleInlineDeliverableUpdate}
                         people={people}
                         rowsClickable={!isAdminView}
-                        emptyMessage={
-                          projectDeliverableCategoryFilter === "All Categories"
-                            ? "No deliverables yet."
-                            : "No deliverables in this category."
-                        }
+                        emptyMessage="No deliverables yet."
                       />
                     </>
                   ) : (

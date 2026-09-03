@@ -78,7 +78,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash2, Crown, X } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
@@ -110,6 +110,94 @@ function categoryColor(category) {
   return FALLBACK_CATEGORY_PALETTE[hash % FALLBACK_CATEGORY_PALETTE.length];
 }
 
+/** Category-wise deliverables list — one collapsed-by-default card per
+ *  category (mirrors the same pattern on the Post-Production page), each
+ *  expanding to the existing per-deliverable card list. Replaces the old
+ *  "All Categories" select filter so every category stays reachable at a
+ *  glance instead of hiding everything else. */
+function DeliverablesByCategoryCards({ deliverables, isAdminOrPM, deletingDeliverableId, onDelete }) {
+  const categories = Array.from(new Set(deliverables.map((d) => d.category).filter(Boolean)));
+  if (deliverables.some((d) => !d.category)) categories.push("Uncategorized");
+
+  const [openCategories, setOpenCategories] = useState(() => new Set());
+
+  function toggleCategory(c) {
+    setOpenCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return next;
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {categories.map((c) => {
+        const rows = deliverables.filter((d) => (d.category || "Uncategorized") === c);
+        const isOpen = openCategories.has(c);
+        return (
+          <Card key={c} className="overflow-hidden">
+            <button
+              type="button"
+              onClick={() => toggleCategory(c)}
+              className="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-slate-50"
+            >
+              <div className="flex items-center gap-2">
+                <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${c === "Uncategorized" ? "bg-slate-100 text-slate-600" : categoryColor(c)}`}>
+                  {c}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {rows.length} deliverable{rows.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+            </button>
+            {isOpen && (
+              <div className="flex flex-col gap-2 border-t border-slate-100 p-3">
+                {rows.map((d) => (
+                  <Card key={d.id}>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="truncate font-medium text-slate-900">{d.type}</p>
+                          {d.category && (
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${categoryColor(d.category)}`}>
+                              {d.category}
+                            </span>
+                          )}
+                        </div>
+                        <p className="truncate text-xs text-slate-500">
+                          {d.assignedName ? `Assigned to ${d.assignedName}` : "Unassigned"}
+                          {d.deadline ? ` · Due ${d.deadline}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <StatusBadge status={d.status} />
+                        {isAdminOrPM && (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            title="Remove deliverable"
+                            disabled={deletingDeliverableId === d.id}
+                            onClick={() => onDelete(d)}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProjectDetailContent() {
   const { id } = useParams();
   const router = useRouter();
@@ -126,7 +214,6 @@ function ProjectDetailContent() {
   const [savingDeliverable, setSavingDeliverable] = useState(false);
   const [deletingDeliverableId, setDeletingDeliverableId] = useState(null);
   const [deliverableCategories, setDeliverableCategories] = useState(DEFAULT_DELIVERABLE_CATEGORIES);
-  const [deliverableCategoryFilter, setDeliverableCategoryFilter] = useState("All Categories");
   const [manageDeliverableCategoriesOpen, setManageDeliverableCategoriesOpen] = useState(false);
   const [newDeliverableCategoryName, setNewDeliverableCategoryName] = useState("");
   const [savingDeliverableCategory, setSavingDeliverableCategory] = useState(false);
@@ -1185,17 +1272,6 @@ function ProjectDetailContent() {
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-base font-medium text-slate-900 sm:text-lg">Deliverables</h3>
               <div className="flex flex-wrap items-center gap-2">
-                {deliverables.length > 0 && (
-                  <Select value={deliverableCategoryFilter} onValueChange={setDeliverableCategoryFilter}>
-                    <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="All Categories">All Categories</SelectItem>
-                      {Array.from(new Set(deliverables.map((d) => d.category).filter(Boolean))).map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
                 {isAdminOrPM && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Dialog open={manageDeliverableCategoriesOpen} onOpenChange={setManageDeliverableCategoriesOpen}>
@@ -1269,52 +1345,14 @@ function ProjectDetailContent() {
             </div>
             {deliverables.length === 0 ? (
               <p className="text-sm text-slate-500">No deliverables yet.</p>
-            ) : (() => {
-              const visibleDeliverables = deliverableCategoryFilter === "All Categories"
-                ? deliverables
-                : deliverables.filter((d) => d.category === deliverableCategoryFilter);
-              return visibleDeliverables.length === 0 ? (
-                <p className="text-sm text-slate-500">No deliverables in this category.</p>
-              ) : (
-              <div className="flex flex-col gap-2">
-                {visibleDeliverables.map((d) => (
-                  <Card key={d.id}>
-                    <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="truncate font-medium text-slate-900">{d.type}</p>
-                          {d.category && (
-                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${categoryColor(d.category)}`}>
-                              {d.category}
-                            </span>
-                          )}
-                        </div>
-                        <p className="truncate text-xs text-slate-500">
-                          {d.assignedName ? `Assigned to ${d.assignedName}` : "Unassigned"}
-                          {d.deadline ? ` · Due ${d.deadline}` : ""}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <StatusBadge status={d.status} />
-                        {isAdminOrPM && (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            title="Remove deliverable"
-                            disabled={deletingDeliverableId === d.id}
-                            onClick={() => handleDeleteDeliverable(d)}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-              );
-            })()}
+            ) : (
+              <DeliverablesByCategoryCards
+                deliverables={deliverables}
+                isAdminOrPM={isAdminOrPM}
+                deletingDeliverableId={deletingDeliverableId}
+                onDelete={handleDeleteDeliverable}
+              />
+            )}
             <p className="mt-2 text-xs text-slate-400">
               Assignment, dates, and deadlines are set from the Post-Production page.
             </p>
