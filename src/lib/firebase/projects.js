@@ -13,6 +13,12 @@ import {
 } from "firebase/firestore";
 import { db } from "./client";
 
+function makeId() {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export async function createProject(data, createdByUid) {
   const now = new Date().toISOString();
   const ref = await addDoc(collection(db, "projects"), {
@@ -107,6 +113,63 @@ export async function updateProjectDetails(id, data) {
     ...data,
     updatedAt: new Date().toISOString(),
   });
+}
+
+/**
+ * hardDisks: [{ id, label, capacityGB, received, receivedAt }]
+ * Tracks each physical client hard disk for a project (a project can hand
+ * over more than one, e.g. separate drives per shoot day or per
+ * photo/video deliverable). Stored as a plain array field on the project
+ * doc, read-modify-write style — same pattern as event.team in events.js —
+ * since Firestore rules can't cheaply diff individual array entries.
+ */
+
+/** Appends a new hard disk entry. capacityGB should be a number (or null if unknown). */
+export async function addHardDisk(projectId, { label, capacityGB }) {
+  const ref = doc(db, "projects", projectId);
+  const snap = await getDoc(ref);
+  const hardDisks = snap.data()?.hardDisks || [];
+  const entry = {
+    id: makeId(),
+    label: label || "",
+    capacityGB: capacityGB || null,
+    received: false,
+    receivedAt: null,
+  };
+  await updateDoc(ref, {
+    hardDisks: [...hardDisks, entry],
+    updatedAt: new Date().toISOString(),
+  });
+  return entry;
+}
+
+/** Edits an existing hard disk entry's label/capacity in place. */
+export async function updateHardDisk(projectId, diskId, { label, capacityGB }) {
+  const ref = doc(db, "projects", projectId);
+  const snap = await getDoc(ref);
+  const hardDisks = (snap.data()?.hardDisks || []).map((d) =>
+    d.id === diskId ? { ...d, label: label ?? d.label, capacityGB: capacityGB ?? d.capacityGB } : d
+  );
+  await updateDoc(ref, { hardDisks, updatedAt: new Date().toISOString() });
+}
+
+/** Toggles one hard disk entry's received status, stamping/clearing receivedAt. */
+export async function toggleHardDiskReceived(projectId, diskId) {
+  const ref = doc(db, "projects", projectId);
+  const snap = await getDoc(ref);
+  const now = new Date().toISOString();
+  const hardDisks = (snap.data()?.hardDisks || []).map((d) =>
+    d.id === diskId ? { ...d, received: !d.received, receivedAt: !d.received ? now : null } : d
+  );
+  await updateDoc(ref, { hardDisks, updatedAt: now });
+}
+
+/** Removes a hard disk entry entirely. */
+export async function removeHardDisk(projectId, diskId) {
+  const ref = doc(db, "projects", projectId);
+  const snap = await getDoc(ref);
+  const hardDisks = (snap.data()?.hardDisks || []).filter((d) => d.id !== diskId);
+  await updateDoc(ref, { hardDisks, updatedAt: new Date().toISOString() });
 }
 
 /**

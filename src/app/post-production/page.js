@@ -1296,8 +1296,13 @@
       }
     }
 
-    async function loadOrgData() {
-      setLoading(true);
+    // `silent` skips the setLoading(true)/(false) toggle — used for every
+    // refresh after the initial mount, so a background re-fetch (after an
+    // inline edit, dialog save, delete, etc.) doesn't blank the whole tab
+    // out to "Loading..." and unmount things like the deliverables'
+    // collapsed/expanded category state.
+    async function loadOrgData({ silent = false } = {}) {
+      if (!silent) setLoading(true);
       try {
         const [projs, evs, emps, frees] = await Promise.all([
           getAllProjects(),
@@ -1327,7 +1332,7 @@
         console.error("Failed to load post-production data:", err);
         toast.error(err.message || "Failed to load post-production data");
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     }
 
@@ -1454,7 +1459,7 @@
 
     async function handleDeliverableSaved() {
       if (selectedProjectId) await loadProject(selectedProjectId);
-      if (isAdminView) await loadOrgData();
+      if (isAdminView) await loadOrgData({ silent: true });
     }
 
     async function handleInlineDeliverableUpdate(d, patch) {
@@ -1463,7 +1468,7 @@
       setProjectDeliverables((prev) => prev.map((row) => (row.id === d.id ? { ...row, ...patch } : row)));
       try {
         await updateDeliverable(d.projectId, d.id, patch);
-        if (isAdminView) loadOrgData();
+        if (isAdminView) loadOrgData({ silent: true });
       } catch (err) {
         toast.error(err.message || "Failed to update deliverable");
         // Roll back on failure.
@@ -1484,7 +1489,7 @@
 
     async function handleStorageSaved() {
       if (selectedProjectId) await loadProject(selectedProjectId);
-      if (isAdminView) await loadOrgData();
+      if (isAdminView) await loadOrgData({ silent: true });
     }
 
     return (

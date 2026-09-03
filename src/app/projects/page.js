@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
-import { Download, Plus, Search } from "lucide-react";
+import { Download, Plus, Search, HardDrive } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 // Financial columns (Package/Received/Balance/Net Profit) read invoices,
@@ -156,6 +156,8 @@ function ProjectsContent() {
       const balance = Math.max(0, packageAmount - received);
       const cost = costByProject[p.id] || 0;
       const netProfit = packageAmount - cost;
+      const hardDisks = p.hardDisks || [];
+      const hddReceivedCount = hardDisks.filter((d) => d.received).length;
       return {
         ...p,
         quoteNumber: quote?.quoteNumber || null,
@@ -164,6 +166,8 @@ function ProjectsContent() {
         balance,
         netProfit,
         bookedMonthKey: monthKey(p.createdAt),
+        hddReceivedCount,
+        hddTotalCount: hardDisks.length,
       };
     });
   }, [projects, quotations, receivedByProject, costByProject, packageOverrides]);
@@ -475,6 +479,7 @@ function ProjectsContent() {
                     <TableHead className="text-right">Net Profit</TableHead>
                   </>
                 )}
+                <TableHead>HDD</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -547,6 +552,22 @@ function ProjectsContent() {
                       </TableCell>
                     </>
                   )}
+                  <TableCell>
+                    {r.hddTotalCount === 0 ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <span
+                        className={`inline-flex h-5 w-fit shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${
+                          r.hddReceivedCount === r.hddTotalCount
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-stone-100 text-stone-600"
+                        }`}
+                      >
+                        <HardDrive className="h-3 w-3" />
+                        {r.hddReceivedCount}/{r.hddTotalCount}
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <StatusBadge status={r.status} />
                   </TableCell>

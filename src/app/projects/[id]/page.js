@@ -14,6 +14,10 @@ import {
   updateProjectStatus,
   deleteProject,
   setProjectLeader,
+  addHardDisk,
+  updateHardDisk,
+  toggleHardDiskReceived,
+  removeHardDisk,
 } from "@/lib/firebase/projects";
 import { createEvent, getEventsForProject, sumEventTeamCost, updateEventTeam } from "@/lib/firebase/events";
 import { getAllEmployees } from "@/lib/firebase/employees";
@@ -78,9 +82,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown, HardDrive } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
+
+function formatDate(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
 
 function inr(n) {
   return `₹${(Number(n) || 0).toLocaleString("en-IN")}`;
@@ -218,6 +229,9 @@ function ProjectDetailContent() {
   const [newDeliverableCategoryName, setNewDeliverableCategoryName] = useState("");
   const [savingDeliverableCategory, setSavingDeliverableCategory] = useState(false);
   const [removingDeliverableCategory, setRemovingDeliverableCategory] = useState(null);
+  const [hddForm, setHddForm] = useState({ label: "", capacityGB: "" });
+  const [savingHdd, setSavingHdd] = useState(false);
+  const [togglingHddId, setTogglingHddId] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -440,6 +454,57 @@ function ProjectDetailContent() {
       await updateProjectStatus(id, status);
       setProject((prev) => ({ ...prev, status }));
       toast.success("Status updated");
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
+  async function handleAddHardDisk() {
+    if (!hddForm.label.trim() && !hddForm.capacityGB) {
+      toast.error("Enter a label or capacity");
+      return;
+    }
+    setSavingHdd(true);
+    try {
+      const entry = await addHardDisk(id, {
+        label: hddForm.label.trim(),
+        capacityGB: hddForm.capacityGB ? Number(hddForm.capacityGB) : null,
+      });
+      setProject((prev) => ({ ...prev, hardDisks: [...(prev.hardDisks || []), entry] }));
+      setHddForm({ label: "", capacityGB: "" });
+      toast.success("Hard disk added");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingHdd(false);
+    }
+  }
+
+  async function handleToggleHardDiskReceived(diskId) {
+    setTogglingHddId(diskId);
+    try {
+      await toggleHardDiskReceived(id, diskId);
+      setProject((prev) => ({
+        ...prev,
+        hardDisks: (prev.hardDisks || []).map((d) =>
+          d.id === diskId
+            ? { ...d, received: !d.received, receivedAt: !d.received ? new Date().toISOString() : null }
+            : d
+        ),
+      }));
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setTogglingHddId(null);
+    }
+  }
+
+  async function handleRemoveHardDisk(diskId) {
+    if (!confirm("Remove this hard disk entry?")) return;
+    try {
+      await removeHardDisk(id, diskId);
+      setProject((prev) => ({ ...prev, hardDisks: (prev.hardDisks || []).filter((d) => d.id !== diskId) }));
+      toast.success("Hard disk removed");
     } catch (err) {
       toast.error(err.message);
     }
@@ -1356,6 +1421,85 @@ function ProjectDetailContent() {
             <p className="mt-2 text-xs text-slate-400">
               Assignment, dates, and deadlines are set from the Post-Production page.
             </p>
+          </div>
+
+          {/* --- Hard Disks --- */}
+          <div className="mb-6">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-base font-medium text-slate-900 sm:text-lg">Client Hard Disks</h3>
+            </div>
+            {(project.hardDisks || []).length === 0 ? (
+              <p className="text-sm text-slate-500">No hard disks logged yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {(project.hardDisks || []).map((d) => (
+                  <Card key={d.id}>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <HardDrive className="h-4 w-4 shrink-0 text-slate-400" />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900">
+                            {d.label || "Hard Disk"}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {d.capacityGB ? `${d.capacityGB} GB` : "Capacity not set"}
+                            {d.received && d.receivedAt ? ` · received ${formatDate(d.receivedAt)}` : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleHardDiskReceived(d.id)}
+                          disabled={togglingHddId === d.id}
+                          title="Click to toggle"
+                          className={`inline-flex h-5 w-fit shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-colors ${
+                            d.received
+                              ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                              : "bg-stone-100 text-stone-500 hover:bg-stone-200"
+                          }`}
+                        >
+                          {d.received ? "Received" : "Pending"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveHardDisk(d.id)}
+                          className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          title="Remove"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <div>
+                <Label className="text-xs text-slate-500">Label</Label>
+                <Input
+                  value={hddForm.label}
+                  onChange={(e) => setHddForm((prev) => ({ ...prev, label: e.target.value }))}
+                  placeholder="e.g. Photos Day 1"
+                  className="h-8 w-40 text-sm"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-slate-500">Capacity (GB)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={hddForm.capacityGB}
+                  onChange={(e) => setHddForm((prev) => ({ ...prev, capacityGB: e.target.value }))}
+                  placeholder="e.g. 1000"
+                  className="h-8 w-28 text-sm"
+                />
+              </div>
+              <Button size="sm" variant="secondary" onClick={handleAddHardDisk} disabled={savingHdd}>
+                <Plus className="h-4 w-4" /> Add Hard Disk
+              </Button>
+            </div>
           </div>
 
           {/* --- Other Expenses --- */}
