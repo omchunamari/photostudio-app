@@ -50,11 +50,22 @@ function getOffInfo(dateStr, holidays) {
   return null;
 }
 
+// Admin and HR submit their own daily report just like any other employee —
+// only super_admin is exempt (mirrors the attendance module: super_admin
+// doesn't check in or report, everyone else including admin/HR does).
+// Admin/HR additionally get the org-wide admin view below their own form,
+// same as HR already got before this change.
 export default function DailyReportPanel() {
     const { user } = useAuth();
-    const isAdminView = ADMIN_ROLES.includes(user.role);
+    const isManagerView = ADMIN_ROLES.includes(user.role);
+    const mustSubmitOwnReport = user.role !== "super_admin";
 
-    return isAdminView ? <AdminReportsView /> : <EmployeeReportForm />;
+    return (
+        <div className="flex flex-col gap-6">
+            {mustSubmitOwnReport && <EmployeeReportForm />}
+            {isManagerView && <AdminReportsView />}
+        </div>
+    );
 }
 
 function EmployeeReportForm() {
