@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
-import { Download, Plus, Search, HardDrive } from "lucide-react";
+import { Download, Plus, Search, HardDrive, List, LayoutGrid } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 // Financial columns (Package/Received/Balance/Net Profit) read invoices,
@@ -91,6 +91,7 @@ function ProjectsContent() {
   const [loading, setLoading] = useState(true);
 
   const [tab, setTab] = useState("active"); // "active" | "done"
+  const [view, setView] = useState("list"); // "list" | "grid"
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [leaderFilter, setLeaderFilter] = useState("all");
@@ -286,6 +287,22 @@ function ProjectsContent() {
           <span className="rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground">{filteredRows.length}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="flex overflow-hidden rounded-md border border-border">
+            <button
+              onClick={() => setView("list")}
+              className={`flex h-9 w-9 items-center justify-center ${view === "list" ? "bg-muted" : "hover:bg-muted/50"}`}
+              aria-label="List view"
+            >
+              <List className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setView("grid")}
+              className={`flex h-9 w-9 items-center justify-center border-l border-border ${view === "grid" ? "bg-muted" : "hover:bg-muted/50"}`}
+              aria-label="Grid view"
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+          </div>
           {canSeeFinance && (
             <Select value={String(fyStart)} onValueChange={setFyStart}>
               <SelectTrigger className="w-[130px]">
@@ -468,7 +485,7 @@ function ProjectsContent() {
               : "You haven't been assigned as Project Leader on any active project."}
           </CardContent>
         </Card>
-      ) : (
+      ) : view === "list" ? (
         <Card>
           <Table>
             <TableHeader>
@@ -581,6 +598,56 @@ function ProjectsContent() {
             </TableBody>
           </Table>
         </Card>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {filteredRows.map((r) => (
+            <Card
+              key={r.id}
+              onClick={() => router.push(`/projects/${r.id}`)}
+              className="cursor-pointer transition-colors hover:bg-muted/50"
+            >
+              <CardContent className="flex flex-col gap-2 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-foreground">{r.projectName}</p>
+                    <p className="text-xs text-muted-foreground">{r.quoteNumber || r.clientName}</p>
+                  </div>
+                  <StatusBadge status={r.status} />
+                </div>
+                <p className="text-xs text-muted-foreground">Booked: {formatDate(r.createdAt)}</p>
+                {r.leaderName ? (
+                  <span className="inline-flex h-5 w-fit shrink-0 items-center rounded-full bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-700">
+                    {r.leaderName}
+                  </span>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No leader assigned</p>
+                )}
+                {canSeeFinance && (
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>Package: <span className="text-foreground">{formatINR(r.packageAmount)}</span></span>
+                    <span>Received: {formatINR(r.received)}</span>
+                    <span className={r.balance > 0 ? "font-medium text-amber-700" : ""}>Balance: {formatINR(r.balance)}</span>
+                    <span className={`font-medium ${r.netProfit >= 0 ? "text-foreground" : "text-destructive"}`}>
+                      Net: {formatINR(r.netProfit)}
+                    </span>
+                  </div>
+                )}
+                {r.hddTotalCount > 0 && (
+                  <span
+                    className={`inline-flex h-5 w-fit shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${
+                      r.hddReceivedCount === r.hddTotalCount
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-stone-100 text-stone-600"
+                    }`}
+                  >
+                    <HardDrive className="h-3 w-3" />
+                    {r.hddReceivedCount}/{r.hddTotalCount}
+                  </span>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       )}
     </AppShell>
   );
