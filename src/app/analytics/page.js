@@ -310,7 +310,7 @@ function TeamLoadTab({ events, tasks, employees }) {
 
   const data = useMemo(() => {
     const scopedEvents = activeOnly ? events.filter((ev) => !isEventPast(ev)) : events;
-    const scopedTasks = activeOnly ? tasks.filter((t) => t.status !== "Done") : tasks;
+    const scopedTasks = activeOnly ? tasks.filter((t) => t.status !== "Delivered") : tasks;
 
     const byPerson = {};
     function ensure(uid, name, role, type) {
@@ -445,7 +445,7 @@ function TeamLoadTab({ events, tasks, employees }) {
             onChange={(e) => setActiveOnly(e.target.checked)}
             className="h-3.5 w-3.5 rounded border-border"
           />
-          Active only (exclude Delivered/Archived events and Done tasks)
+          Active only (exclude Delivered/Archived events and Delivered deliverables)
         </label>
       </div>
 
@@ -879,7 +879,7 @@ function SalesFunnelTab({ leads, quotations }) {
 // field the way the old postProdTasks model did — only `deadline`. Mirrors
 // the isOverdue() helper that used to live in postProduction.js.
 function isDeliverableOverdue(d) {
-  if (!d.deadline || d.status === "Done") return false;
+  if (!d.deadline || d.status === "Delivered") return false;
   return d.deadline < new Date().toISOString().split("T")[0];
 }
 
@@ -917,7 +917,7 @@ function PostProductionTab({ tasks, employees }) {
           byPerson[uid] = { uid, name: names[i] || emp?.name || "Unknown", total: 0, completed: 0, overdue: 0 };
         }
         byPerson[uid].total += 1;
-        if (t.status === "Done") byPerson[uid].completed += 1;
+        if (t.status === "Delivered") byPerson[uid].completed += 1;
         if (isDeliverableOverdue(t)) byPerson[uid].overdue += 1;
       });
     });
@@ -932,7 +932,7 @@ function PostProductionTab({ tasks, employees }) {
       if (createdKey && byMonth[createdKey]) byMonth[createdKey].created += 1;
     });
     tasks.forEach((t) => {
-      if (t.status !== "Done") return;
+      if (t.status !== "Delivered") return;
       const key = monthKey(t.updatedAt || t.createdAt);
       if (key && byMonth[key]) byMonth[key].completed += 1;
     });
@@ -940,7 +940,7 @@ function PostProductionTab({ tasks, employees }) {
   }, [tasks, range]);
 
   const total = tasks.length;
-  const completed = tasks.filter((t) => t.status === "Done").length;
+  const completed = tasks.filter((t) => t.status === "Delivered").length;
   const inProgress = tasks.filter((t) => t.status === "In Progress").length;
 
   return (

@@ -31,7 +31,6 @@ import AvatarInitials from "@/components/ui/avatar-initials";
 import { toast } from "sonner";
 import { AlertTriangle, X, Users2, Banknote } from "lucide-react";
 
-const SHOOT_ROLES = ["photographer", "videographer", "editor", "data_manager"];
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 /**
@@ -82,7 +81,7 @@ export default function AssignTeamDialog({
 
       try {
         const emps = await getAllEmployees();
-        setEmployees(emps.filter((e) => SHOOT_ROLES.includes(e.role) && e.status === "active"));
+        setEmployees(emps.filter((e) => e.status === "active"));
       } catch (err) {
         toast.error(`Failed loading employees: ${err.message}`);
       }
@@ -121,6 +120,15 @@ export default function AssignTeamDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projectId, eventId]);
 
+  // Picks the right freelancer profile rate for a given rate-type label —
+  // "Fixed" has no profile rate to suggest, so it's left for manual entry.
+  function freelancerRateForLabel(fl, label) {
+    if (!fl) return "";
+    if (label === "Half Day") return fl.halfDayRate ? String(fl.halfDayRate) : "";
+    if (label === "Full Day") return fl.fullDayRate ? String(fl.fullDayRate) : (fl.dayRate ? String(fl.dayRate) : "");
+    return "";
+  }
+
   useEffect(() => {
     if (!selectedKey) {
       setAssignDayRate("");
@@ -130,13 +138,31 @@ export default function AssignTeamDialog({
     if (kind === "freelancer") {
       const fl = freelancers.find((f) => f.id === selId);
       setAssignDayRate(fl?.dayRate ? String(fl.dayRate) : "");
-      setAssignCost(fl?.dayRate ? String(fl.dayRate) : "");
+      const suggested = freelancerRateForLabel(fl, "Full Day");
+      setAssignCost(suggested);
     } else {
       setAssignDayRate("");
       setAssignCost("");
     }
     setAssignCostLabel("Full Day");
   }, [selectedKey, freelancers]);
+
+  // When the rate-type toggle changes (Full Day / Half Day / Fixed) for a
+  // freelancer, re-suggest the wage from their profile so half-day
+  // assignments pick up halfDayRate automatically instead of staying on
+  // whatever full-day figure was auto-filled at selection time. Manual
+  // edits to the wage field itself are untouched — this only fires when
+  // the rate type changes.
+  function handleAssignCostLabelChange(label) {
+    setAssignCostLabel(label);
+    if (!selectedKey) return;
+    const [kind, id] = selectedKey.split(":");
+    if (kind === "freelancer") {
+      const fl = freelancers.find((f) => f.id === id);
+      const suggested = freelancerRateForLabel(fl, label);
+      if (suggested) setAssignCost(suggested);
+    }
+  }
 
   async function persistTeam(newTeam) {
     await updateEventTeam(projectId, eventId, newTeam, event.status);
@@ -260,7 +286,7 @@ export default function AssignTeamDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-[95vw] max-w-lg flex-col overflow-hidden p-0">
+      <DialogContent className="flex max-h-[85vh] w-[95vw] max-w-lg flex-col overflow-hidden p-0 sm:max-w-2xl">
         <DialogHeader className="border-b border-slate-100 px-5 pb-3 pt-5">
           <DialogTitle>Assign Team — {eventName || event?.eventName}</DialogTitle>
         </DialogHeader>
@@ -400,7 +426,7 @@ export default function AssignTeamDialog({
 
               <div className="mb-3">
                 <Select value={selectedKey} onValueChange={setSelectedKey}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     {selectedLabel || <span className="text-slate-400">Select...</span>}
                   </SelectTrigger>
                   <SelectContent>
@@ -447,7 +473,7 @@ export default function AssignTeamDialog({
                   <div className="mb-3 grid grid-cols-2 gap-3">
                     <div>
                       <Label htmlFor="assignCostLabel">Rate type</Label>
-                      <Select value={assignCostLabel} onValueChange={setAssignCostLabel}>
+                      <Select value={assignCostLabel} onValueChange={handleAssignCostLabelChange}>
                         <SelectTrigger id="assignCostLabel">{assignCostLabel}</SelectTrigger>
                         <SelectContent>
                           <SelectItem value="Full Day">Full Day</SelectItem>

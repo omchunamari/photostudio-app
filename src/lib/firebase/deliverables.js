@@ -32,6 +32,8 @@ import { getAllProjects } from "./projects";
  *   deadline: string | null,   // ISO date
  *   instructions: string,      // admin/PM-authored note for the assignee — see updateDeliverable
  *   createdAt, updatedAt: ISO strings,
+ *   charge: number | null,     // employee charge logged for this deliverable — see updateDeliverableCharge
+ *   chargeNotes: string,       // optional free-text note on how the charge was arrived at
  * }
  *
  * Every project gets the same fixed starter set (DELIVERABLE_TYPES) the
@@ -40,31 +42,76 @@ import { getAllProjects } from "./projects";
  */
 
 export const DELIVERABLE_TYPES = [
-  "Raw Photos",
+  "Earlyshare Sorting",
+  "Earlyshare Editing",
+  "Full Set Sorting",
+  "Full Set Editing",
+  "Full Set Retouching",
+  "Reel",
   "Trailer",
-  "Reels",
-  "Full Film",
-  "Photo Selection",
-  "Photo Editing",
-  "Album Designing",
-  "Albums",
+  "Highlight",
+  "Film",
+  "Traditional Video",
+  "Design",
+  "Printing",
 ];
 
 // Default category each starter type is filed under when a project's fixed
 // set is first created — just a sensible starting point, editable per
 // deliverable afterwards like any other field.
 const DELIVERABLE_TYPE_DEFAULT_CATEGORY = {
-  "Raw Photos": "Photography",
+  "Earlyshare Sorting": "Photography",
+  "Earlyshare Editing": "Photography",
+  "Full Set Sorting": "Photography",
+  "Full Set Editing": "Photography",
+  "Full Set Retouching": "Photography",
+  "Reel": "Videography",
   "Trailer": "Videography",
-  "Reels": "Videography",
-  "Full Film": "Videography",
-  "Photo Selection": "Photography",
-  "Photo Editing": "Photography",
-  "Album Designing": "Album",
-  "Albums": "Album",
+  "Highlight": "Videography",
+  "Film": "Videography",
+  "Traditional Video": "Videography",
+  "Design": "Album",
+  "Printing": "Album",
 };
 
-export const DELIVERABLE_STATUSES = ["Pending", "In Progress", "Done"];
+/**
+ * Post-production pipeline. Replaces the old 3-stage
+ * Pending/In Progress/Done vocabulary — DELIVERABLE_STATUS_MIGRATION below
+ * maps old values on read so nothing already stored breaks.
+ */
+export const DELIVERABLE_STATUSES = [
+  "Not Started",
+  "In Progress",
+  "Draft Ready",
+  "Sent to Client",
+  "Approval / Revision",
+  "Final Done",
+  "Delivered",
+];
+
+// The status a deliverable is considered fully closed out at — used
+// anywhere the app needs a single "is this done" check (dashboards,
+// analytics, overdue calculations, etc).
+export const DELIVERABLE_DONE_STATUS = "Delivered";
+
+// One-time mapping from the old 3-stage vocabulary to the new pipeline.
+// Applied defensively on every read (normalizeDeliverableStatus) so old
+// docs display correctly immediately, and can also be run as a real
+// write-back via scripts/migrate-deliverable-statuses.js.
+export const DELIVERABLE_STATUS_MIGRATION = {
+  "Pending": "Not Started",
+  "In Progress": "In Progress",
+  "Done": "Delivered",
+};
+
+export function normalizeDeliverableStatus(status) {
+  if (DELIVERABLE_STATUSES.includes(status)) return status;
+  return DELIVERABLE_STATUS_MIGRATION[status] || DELIVERABLE_STATUSES[0];
+}
+
+function normalizeDeliverableDoc(d) {
+  return { ...d, status: normalizeDeliverableStatus(d.status) };
+}
 
 // --- Deliverable categories -------------------------------------------
 // Fixed defaults — always available, cannot be removed via Manage
@@ -156,7 +203,7 @@ export async function ensureDeliverablesForProject(project) {
     const data = {
       type,
       category: DELIVERABLE_TYPE_DEFAULT_CATEGORY[type] || "Other",
-      status: "Pending",
+      status: DELIVERABLE_STATUSES[0],
       projectId: project.id,
       projectName: project.projectName || "",
       clientName: project.clientName || "",
@@ -166,6 +213,8 @@ export async function ensureDeliverablesForProject(project) {
       endDate: null,
       deadline: null,
       instructions: "",
+      charge: null,
+      chargeNotes: "",
       createdAt: now,
       updatedAt: now,
     };
@@ -178,7 +227,7 @@ export async function ensureDeliverablesForProject(project) {
 
 export async function getDeliverablesForProject(projectId) {
   const snap = await getDocs(collection(db, "projects", projectId, "deliverables"));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return snap.docs.map((d) => normalizeDeliverableDoc({ id: d.id, ...d.data() }));
 }
 
 /**
@@ -235,7 +284,7 @@ export async function getDeliverablesForEmployee(uid) {
     orderBy("deadline", "asc")
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return snap.docs.map((d) => normalizeDeliverableDoc({ id: d.id, ...d.data() }));
 }
 
 /**
@@ -266,7 +315,7 @@ export async function addDeliverable(project, type, category) {
   const ref = await addDoc(collection(db, "projects", project.id, "deliverables"), {
     type,
     category: category || "Other",
-    status: "Pending",
+    status: DELIVERABLE_STATUSES[0],
     projectId: project.id,
     projectName: project.projectName || "",
     clientName: project.clientName || "",
@@ -276,6 +325,8 @@ export async function addDeliverable(project, type, category) {
     endDate: null,
     deadline: null,
     instructions: "",
+    charge: null,
+    chargeNotes: "",
     createdAt: now,
     updatedAt: now,
   });
@@ -290,6 +341,21 @@ export async function updateDeliverable(projectId, deliverableId, data) {
   if ("assignedUid" in data) {
     await syncProjectDeliverableAssigneeUids(projectId);
   }
+}
+
+/**
+ * Admin/PM-only: log or edit the employee charge for a deliverable.
+ * Kept separate from the generic updateDeliverable() so it's easy to gate
+ * to project-ops in firestore.rules (charge is a financial field, not
+ * something the assigned employee can self-report via
+ * addDeliverableStatusUpdate).
+ */
+export async function updateDeliverableCharge(projectId, deliverableId, { charge, chargeNotes }) {
+  await updateDoc(doc(db, "projects", projectId, "deliverables", deliverableId), {
+    charge: charge === "" || charge === null || charge === undefined ? null : Number(charge),
+    chargeNotes: chargeNotes || "",
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export async function deleteDeliverable(projectId, deliverableId) {

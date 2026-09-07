@@ -13,6 +13,7 @@ import {
   deleteLead,
 } from "@/lib/firebase/leads";
 import { getAllEmployees } from "@/lib/firebase/employees";
+import { ROLES } from "@/lib/constants/roles";
 import {
   LEAD_STATUSES,
   PROJECT_TYPES,
@@ -105,6 +106,10 @@ function LeadsContent() {
   const router = useRouter();
   const [leads, setLeads] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const projectLeaders = useMemo(
+    () => employees.filter((e) => e.role === ROLES.PROJECT_MANAGER),
+    [employees]
+  );
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -491,12 +496,12 @@ function LeadsContent() {
         <Select value={execFilter} onValueChange={setExecFilter}>
           <SelectTrigger className="w-full sm:w-[170px]">
             <SelectValue>
-              {(v) => (v === "all" ? "All executives" : employees.find((e) => e.uid === v)?.name || "All executives")}
+              {(v) => (v === "all" ? "All project leaders" : projectLeaders.find((e) => e.uid === v)?.name || "All project leaders")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All executives</SelectItem>
-            {employees.map((e) => (
+            <SelectItem value="all">All project leaders</SelectItem>
+            {projectLeaders.map((e) => (
               <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
             ))}
           </SelectContent>

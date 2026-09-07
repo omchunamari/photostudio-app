@@ -42,7 +42,10 @@ import {
   ClipboardList,
 } from "lucide-react";
 
-const ADMIN_ROLES = ["super_admin", "admin"];
+// Admin behaves like a regular employee on the dashboard now — they check
+// in, track their own projects/deliverables, and submit daily reports just
+// like everyone else. Only super_admin gets the org-wide admin stats view.
+const ADMIN_ROLES = ["super_admin"];
 // Who can post/edit the dashboard-wide announcement — same boundary as
 // project ops elsewhere (super_admin/admin/project_manager).
 const ANNOUNCEMENT_ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
@@ -233,7 +236,7 @@ function DashboardContent() {
   async function loadMyDeliverables() {
     try {
       const deliverables = await getDeliverablesForEmployee(user.uid);
-      setMyDeliverables(deliverables.filter((d) => d.status !== "Done"));
+      setMyDeliverables(deliverables.filter((d) => d.status !== "Delivered"));
     } catch (err) {
       console.error("Failed to load your deliverables:", err);
     }
@@ -416,9 +419,13 @@ function MyProjectsPanel({ projects }) {
 }
 
 const DELIVERABLE_STATUS_DOT = {
-  Pending: "bg-amber-500",
+  "Not Started": "bg-amber-500",
   "In Progress": "bg-sky-500",
-  Done: "bg-emerald-500",
+  "Draft Ready": "bg-blue-500",
+  "Sent to Client": "bg-violet-500",
+  "Approval / Revision": "bg-orange-500",
+  "Final Done": "bg-teal-500",
+  Delivered: "bg-emerald-500",
 };
 
 function MyPostProductionPanel({ deliverables }) {

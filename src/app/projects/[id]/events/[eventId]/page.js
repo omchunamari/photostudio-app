@@ -48,7 +48,6 @@ import AvatarInitials from "@/components/ui/avatar-initials";
 import { toast } from "sonner";
 import { ArrowLeft, AlertTriangle, X, Trash2, Users2, CalendarDays, MessageSquare, Banknote } from "lucide-react";
 
-const SHOOT_ROLES = ["photographer", "videographer", "editor", "data_manager"];
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 function EventDetailContent() {
@@ -110,7 +109,7 @@ function EventDetailContent() {
 
         try {
           const emps = await getAllEmployees();
-          setEmployees(emps.filter((e) => SHOOT_ROLES.includes(e.role) && e.status === "active"));
+          setEmployees(emps.filter((e) => e.status === "active"));
         } catch (err) {
           toast.error(`Failed loading employees: ${err.message}`);
         }
@@ -153,6 +152,15 @@ function EventDetailContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, eventId]);
 
+  // Picks the right freelancer profile rate for a given rate-type label —
+  // "Fixed" has no profile rate to suggest, so it's left for manual entry.
+  function freelancerRateForLabel(fl, label) {
+    if (!fl) return "";
+    if (label === "Half Day") return fl.halfDayRate ? String(fl.halfDayRate) : "";
+    if (label === "Full Day") return fl.fullDayRate ? String(fl.fullDayRate) : (fl.dayRate ? String(fl.dayRate) : "");
+    return "";
+  }
+
   // Prefill the per-assignment day rate with the freelancer's default rate
   // whenever a freelancer is picked, so it's a one-click "use default" but
   // still editable per assignment (e.g. a negotiated rate for this project).
@@ -165,13 +173,28 @@ function EventDetailContent() {
     if (kind === "freelancer") {
       const fl = freelancers.find((f) => f.id === selId);
       setAssignDayRate(fl?.dayRate ? String(fl.dayRate) : "");
-      setAssignCost(fl?.dayRate ? String(fl.dayRate) : "");
+      setAssignCost(freelancerRateForLabel(fl, "Full Day"));
     } else {
       setAssignDayRate("");
       setAssignCost("");
     }
     setAssignCostLabel("Full Day");
   }, [selectedKey, freelancers]);
+
+  // When the rate-type toggle changes (Full Day / Half Day / Fixed) for a
+  // freelancer, re-suggest the wage from their profile so half-day
+  // assignments pick up halfDayRate automatically instead of staying on
+  // whatever full-day figure was auto-filled at selection time.
+  function handleAssignCostLabelChange(label) {
+    setAssignCostLabel(label);
+    if (!selectedKey) return;
+    const [kind, id] = selectedKey.split(":");
+    if (kind === "freelancer") {
+      const fl = freelancers.find((f) => f.id === id);
+      const suggested = freelancerRateForLabel(fl, label);
+      if (suggested) setAssignCost(suggested);
+    }
+  }
 
   async function saveDetails(values, { silent } = {}) {
     if (values.eventStartDate && values.eventEndDate && values.eventEndDate < values.eventStartDate) {
@@ -524,7 +547,7 @@ function EventDetailContent() {
               <div className="flex-1">
                 <Label>Employee or Freelancer</Label>
                 <Select value={selectedKey} onValueChange={setSelectedKey}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     {selectedLabel || <span className="text-muted-foreground">Select employee or freelancer</span>}
                   </SelectTrigger>
                   <SelectContent>
@@ -575,7 +598,7 @@ function EventDetailContent() {
               <div className="mb-3 flex flex-wrap gap-3">
                 <div className="w-32">
                   <Label htmlFor="assignCostLabel">Rate type</Label>
-                  <Select value={assignCostLabel} onValueChange={setAssignCostLabel}>
+                  <Select value={assignCostLabel} onValueChange={handleAssignCostLabelChange}>
                     <SelectTrigger id="assignCostLabel">{assignCostLabel}</SelectTrigger>
                     <SelectContent>
                       <SelectItem value="Full Day">Full Day</SelectItem>

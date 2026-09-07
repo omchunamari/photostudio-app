@@ -11,6 +11,7 @@ import { getAllQuotations } from "@/lib/firebase/quotations";
 import { getAllInvoices, sumReceived } from "@/lib/firebase/invoices";
 import { getAllExpenses, sumExpensesByProject } from "@/lib/firebase/expenses";
 import { getAllEmployees } from "@/lib/firebase/employees";
+import { ROLES } from "@/lib/constants/roles";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
 import { isProjectPast } from "@/lib/status";
 import { fyStartYearForDate, fyLabel, inFY, formatINR } from "@/lib/dashboardFinance";
@@ -83,6 +84,10 @@ function ProjectsContent() {
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const projectLeaders = useMemo(
+    () => employees.filter((e) => e.role === ROLES.PROJECT_MANAGER),
+    [employees]
+  );
   const [loading, setLoading] = useState(true);
 
   const [tab, setTab] = useState("active"); // "active" | "done"
@@ -438,12 +443,12 @@ function ProjectsContent() {
           <Select value={leaderFilter} onValueChange={setLeaderFilter}>
             <SelectTrigger className="w-full sm:w-[170px]">
               <SelectValue>
-                {(v) => (v === "all" ? "All executives" : employees.find((e) => e.uid === v)?.name || "All executives")}
+                {(v) => (v === "all" ? "All project leaders" : projectLeaders.find((e) => e.uid === v)?.name || "All project leaders")}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All executives</SelectItem>
-              {employees.map((e) => (
+              <SelectItem value="all">All project leaders</SelectItem>
+              {projectLeaders.map((e) => (
                 <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
               ))}
             </SelectContent>

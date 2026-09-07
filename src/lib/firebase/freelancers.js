@@ -17,7 +17,11 @@ import { db } from "./client";
  *   phone: string,
  *   email: string | null,
  *   skill: string,        // one of FREELANCER_SKILLS — matches employee `role` values
- *   dayRate: number,       // per-day rate in INR, used later for expense tracking
+ *   halfDayRate: number,   // half-day rate in INR
+ *   fullDayRate: number,   // full-day rate in INR
+ *   dayRate: number,       // kept in sync with fullDayRate for backward compat with
+ *                          // existing cost-calculation code (event assignment cost
+ *                          // suggestions, analytics payout estimates) that reads dayRate
  *   notes: string,
  *   status: "active" | "inactive",
  *   createdBy: uid,
@@ -43,7 +47,9 @@ export async function createFreelancer(data, createdByUid) {
     phone: data.phone?.trim() || "",
     email: data.email?.trim() || null,
     skill: data.skill,
-    dayRate: Number(data.dayRate) || 0,
+    halfDayRate: Number(data.halfDayRate) || 0,
+    fullDayRate: Number(data.fullDayRate) || 0,
+    dayRate: Number(data.fullDayRate) || 0,
     notes: data.notes?.trim() || "",
     status: "active",
     createdBy: createdByUid,
@@ -59,7 +65,9 @@ export async function updateFreelancer(id, data) {
     phone: data.phone?.trim() || "",
     email: data.email?.trim() || null,
     skill: data.skill,
-    dayRate: Number(data.dayRate) || 0,
+    halfDayRate: Number(data.halfDayRate) || 0,
+    fullDayRate: Number(data.fullDayRate) || 0,
+    dayRate: Number(data.fullDayRate) || 0,
     notes: data.notes?.trim() || "",
     updatedAt: new Date().toISOString(),
   });

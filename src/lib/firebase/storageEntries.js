@@ -27,13 +27,18 @@ import { db } from "./client";
  *   lightroomFile: string,
  *   copiedBy: string,
  *   notes: string,
- *   loggedBy: string,           // name of whoever filled the form
+ *   loggedBy: string,           // name of whoever filled the form — always shown, so it's clear who logged it
  *   loggedByUid: string,
  *   createdAt, updatedAt: ISO strings,
  * }
  *
- * One entry per (eventId, memberUid) — a team member's data for a given
- * event is either "not received yet" (no doc) or logged (doc exists).
+ * Event-wise, not person-wise: any number of entries can exist for the
+ * same (eventId, memberUid) pair — anyone assigned to the project (or
+ * admin/PM) can log a storage entry for any team member on that event,
+ * not just their own. loggedBy/loggedByUid record who actually logged
+ * each entry, and that name is visible to everyone. An update/delete is
+ * only allowed by whoever logged the entry (or an admin/PM) — see
+ * firestore.rules.
  */
 
 export async function getStorageEntriesForProject(projectId) {

@@ -40,7 +40,9 @@ import {
   ChevronUp,
 } from "lucide-react";
 
-const ADMIN_ROLES = ["super_admin", "admin", "hr"];
+// Admin marks their own attendance like any other employee now — only
+// super_admin and HR get the org-wide view/manage table below.
+const ADMIN_ROLES = ["super_admin", "hr"];
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",

@@ -46,9 +46,9 @@ import {
     AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Phone, Mail, Pencil, Trash2 } from "lucide-react";
+import { Phone, Mail, Pencil, Trash2, LayoutGrid, List } from "lucide-react";
 
-const EMPTY_FORM = { name: "", phone: "", email: "", skill: "photographer", dayRate: "", notes: "" };
+const EMPTY_FORM = { name: "", phone: "", email: "", skill: "photographer", halfDayRate: "", fullDayRate: "", notes: "" };
 
 function FreelancersContent() {
     const { user } = useAuth();
@@ -57,6 +57,7 @@ function FreelancersContent() {
     const [search, setSearch] = useState("");
     const [skillFilter, setSkillFilter] = useState("all");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [view, setView] = useState("grid"); // grid | list
 
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -114,7 +115,8 @@ function FreelancersContent() {
             phone: fl.phone || "",
             email: fl.email || "",
             skill: fl.skill || "photographer",
-            dayRate: fl.dayRate || "",
+            halfDayRate: fl.halfDayRate || "",
+            fullDayRate: fl.fullDayRate || fl.dayRate || "",
             notes: fl.notes || "",
         });
     }
@@ -129,7 +131,15 @@ function FreelancersContent() {
             await updateFreelancer(editFl.id, editForm);
             toast.success("Freelancer updated");
             setFreelancers((prev) =>
-                prev.map((f) => (f.id === editFl.id ? { ...f, ...editForm, dayRate: Number(editForm.dayRate) || 0 } : f))
+                prev.map((f) => (f.id === editFl.id
+                    ? {
+                        ...f,
+                        ...editForm,
+                        halfDayRate: Number(editForm.halfDayRate) || 0,
+                        fullDayRate: Number(editForm.fullDayRate) || 0,
+                        dayRate: Number(editForm.fullDayRate) || 0,
+                    }
+                    : f))
             );
             setEditFl(null);
         } catch (err) {
@@ -220,9 +230,15 @@ function FreelancersContent() {
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div>
-                                <Label htmlFor="dayRate">Day Rate (₹)</Label>
-                                <Input id="dayRate" type="number" min="0" value={form.dayRate} onChange={(e) => updateForm("dayRate", e.target.value)} placeholder="e.g. 3000" />
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <Label htmlFor="halfDayRate">Half Day Rate (₹)</Label>
+                                    <Input id="halfDayRate" type="number" min="0" value={form.halfDayRate} onChange={(e) => updateForm("halfDayRate", e.target.value)} placeholder="e.g. 1500" />
+                                </div>
+                                <div>
+                                    <Label htmlFor="fullDayRate">Full Day Rate (₹)</Label>
+                                    <Input id="fullDayRate" type="number" min="0" value={form.fullDayRate} onChange={(e) => updateForm("fullDayRate", e.target.value)} placeholder="e.g. 3000" />
+                                </div>
                             </div>
                             <div>
                                 <Label htmlFor="notes">Notes (optional)</Label>
@@ -261,6 +277,26 @@ function FreelancersContent() {
                             <SelectItem value="inactive">Inactive</SelectItem>
                         </SelectContent>
                     </Select>
+                    <div className="flex items-center gap-1 rounded-md border border-slate-200 p-0.5">
+                        <Button
+                            type="button"
+                            variant={view === "grid" ? "default" : "ghost"}
+                            size="icon-sm"
+                            onClick={() => setView("grid")}
+                            aria-label="Grid view"
+                        >
+                            <LayoutGrid className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={view === "list" ? "default" : "ghost"}
+                            size="icon-sm"
+                            onClick={() => setView("list")}
+                            aria-label="List view"
+                        >
+                            <List className="h-3.5 w-3.5" />
+                        </Button>
+                    </div>
                 </CardContent>
             </Card>
 
@@ -275,11 +311,11 @@ function FreelancersContent() {
                     </CardContent>
                 </Card>
             ) : (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={view === "grid" ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-col gap-2"}>
                     {filteredFreelancers.map((fl) => (
                         <Card key={fl.id}>
-                            <CardContent className="flex flex-col gap-3 p-4">
-                                <div className="flex items-start justify-between gap-2">
+                            <CardContent className={view === "grid" ? "flex flex-col gap-3 p-4" : "flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between"}>
+                                <div className={view === "grid" ? "flex items-start justify-between gap-2" : "flex min-w-0 flex-1 items-center gap-4"}>
                                     <div className="flex min-w-0 items-center gap-2.5">
                                         <AvatarInitials name={fl.name} size="md" />
                                         <div className="min-w-0">
@@ -287,35 +323,55 @@ function FreelancersContent() {
                                             <p className="text-xs text-slate-500">{FREELANCER_SKILL_LABELS[fl.skill] || fl.skill}</p>
                                         </div>
                                     </div>
-                                    <StatusBadge status={fl.status} />
+                                    {view === "grid" ? (
+                                        <StatusBadge status={fl.status} />
+                                    ) : (
+                                        <div className="hidden shrink-0 items-center gap-1.5 text-sm text-slate-600 sm:flex">
+                                            <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" /> {fl.phone || "—"}
+                                        </div>
+                                    )}
+                                    {view === "list" && (fl.halfDayRate > 0 || fl.fullDayRate > 0) && (
+                                        <div className="hidden shrink-0 text-xs text-slate-500 sm:block">
+                                            {fl.halfDayRate > 0 && <>₹{fl.halfDayRate.toLocaleString("en-IN")} / half-day</>}
+                                            {fl.halfDayRate > 0 && fl.fullDayRate > 0 && " · "}
+                                            {fl.fullDayRate > 0 && <>₹{fl.fullDayRate.toLocaleString("en-IN")} / full-day</>}
+                                        </div>
+                                    )}
+                                    {view === "list" && <StatusBadge status={fl.status} />}
                                 </div>
 
-                                <div className="flex flex-col gap-1 text-sm text-slate-600">
-                                    <span className="flex items-center gap-1.5">
-                                        <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" /> {fl.phone || "—"}
-                                    </span>
-                                    {fl.email && (
-                                        <span className="flex items-center gap-1.5 truncate">
-                                            <Mail className="h-3.5 w-3.5 shrink-0 text-slate-400" /> {fl.email}
+                                {view === "grid" && (
+                                    <div className="flex flex-col gap-1 text-sm text-slate-600">
+                                        <span className="flex items-center gap-1.5">
+                                            <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" /> {fl.phone || "—"}
                                         </span>
-                                    )}
-                                    {fl.dayRate > 0 && (
-                                        <span className="text-xs text-slate-500">₹{fl.dayRate.toLocaleString("en-IN")} / day</span>
-                                    )}
-                                </div>
+                                        {fl.email && (
+                                            <span className="flex items-center gap-1.5 truncate">
+                                                <Mail className="h-3.5 w-3.5 shrink-0 text-slate-400" /> {fl.email}
+                                            </span>
+                                        )}
+                                        {(fl.halfDayRate > 0 || fl.fullDayRate > 0) && (
+                                            <span className="text-xs text-slate-500">
+                                                {fl.halfDayRate > 0 && <>₹{fl.halfDayRate.toLocaleString("en-IN")} / half-day</>}
+                                                {fl.halfDayRate > 0 && fl.fullDayRate > 0 && " · "}
+                                                {fl.fullDayRate > 0 && <>₹{fl.fullDayRate.toLocaleString("en-IN")} / full-day</>}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
 
-                                {fl.notes && (
+                                {view === "grid" && fl.notes && (
                                     <p className="line-clamp-2 rounded-md bg-slate-50 p-2 text-xs text-slate-500">{fl.notes}</p>
                                 )}
 
-                                <div className="mt-1 flex items-center gap-2">
-                                    <Button variant="outline" size="sm" className="flex-1" onClick={() => openEditor(fl)}>
+                                <div className={view === "grid" ? "mt-1 flex items-center gap-2" : "flex shrink-0 items-center gap-2"}>
+                                    <Button variant="outline" size="sm" className={view === "grid" ? "flex-1" : ""} onClick={() => openEditor(fl)}>
                                         <Pencil className="h-3.5 w-3.5" /> Edit
                                     </Button>
                                     <Button
                                         variant="outline"
                                         size="sm"
-                                        className="flex-1"
+                                        className={view === "grid" ? "flex-1" : ""}
                                         onClick={() => handleToggleStatus(fl)}
                                     >
                                         {fl.status === "active" ? "Deactivate" : "Activate"}
@@ -382,9 +438,15 @@ function FreelancersContent() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div>
-                            <Label htmlFor="edit-dayRate">Day Rate (₹)</Label>
-                            <Input id="edit-dayRate" type="number" min="0" value={editForm.dayRate} onChange={(e) => setEditForm((p) => ({ ...p, dayRate: e.target.value }))} />
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <Label htmlFor="edit-halfDayRate">Half Day Rate (₹)</Label>
+                                <Input id="edit-halfDayRate" type="number" min="0" value={editForm.halfDayRate} onChange={(e) => setEditForm((p) => ({ ...p, halfDayRate: e.target.value }))} />
+                            </div>
+                            <div>
+                                <Label htmlFor="edit-fullDayRate">Full Day Rate (₹)</Label>
+                                <Input id="edit-fullDayRate" type="number" min="0" value={editForm.fullDayRate} onChange={(e) => setEditForm((p) => ({ ...p, fullDayRate: e.target.value }))} />
+                            </div>
                         </div>
                         <div>
                             <Label htmlFor="edit-notes">Notes (optional)</Label>

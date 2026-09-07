@@ -392,7 +392,11 @@ export async function getAllEvents() {
   const eventLists = await Promise.all(
     projects.map((p) => getEventsForProject(p.id))
   );
-  return eventLists.flat();
+  return eventLists.flat().sort((a, b) => {
+    const dateA = a.eventStartDate || "";
+    const dateB = b.eventStartDate || "";
+    return dateA.localeCompare(dateB);
+  });
 }
 
 /** Events assigned to a specific employee, across every project. */

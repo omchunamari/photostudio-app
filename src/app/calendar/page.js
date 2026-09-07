@@ -204,7 +204,7 @@ function CalendarContent() {
     // keep cluttering the calendar.
     deliverables.forEach((dl) => {
       if (!dl.deadline) return;
-      if (!showPast && dl.status === "Done") return;
+      if (!showPast && dl.status === "Delivered") return;
       ensure(dl.deadline).deliverables.push(dl);
     });
     return map;
@@ -495,7 +495,7 @@ function CalendarContent() {
                   empty="No deliverables due"
                 >
                   {selectedInfo.deliverables.map((dl) => {
-                    const overdue = dl.status !== "Done" && dl.deadline < todayStr;
+                    const overdue = dl.status !== "Delivered" && dl.deadline < todayStr;
                     const href = deliverableHref(dl);
                     const CardTag = href ? Link : "div";
                     return (
