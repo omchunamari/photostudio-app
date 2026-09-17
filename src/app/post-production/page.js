@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, Suspense, Fragment } from "react";
+import { useSearchParams } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -29,6 +30,8 @@ import {
 import { getAllProjects } from "@/lib/firebase/projects";
 import { getAllEvents, getEventsForProject } from "@/lib/firebase/events";
 import { getAllEmployees } from "@/lib/firebase/employees";
+import SearchableSelect from "@/components/ui/searchable-select";
+import CategoryField from "@/components/CategoryField";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -44,13 +47,6 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -75,6 +71,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { formatDateIST } from "@/lib/dateIST";
 
 const STATUS_COLORS = {
   "Not Started": "oklch(0.75 0.05 75)",
@@ -129,7 +126,7 @@ function getFinancialYearOptions() {
 
 function fmtDate(d) {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return formatDateIST(d);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -149,7 +146,7 @@ function fmtDate(d) {
  * entirely when canManage is false, so an employee's save can never
  * attempt a write firestore.rules would reject.
  */
-function DeliverableDialog({ open, onOpenChange, deliverable, people, categories, canManage, onSaved }) {
+function DeliverableDialog({ open, onOpenChange, deliverable, people, categories, canManage, onSaved, onAddCategory, onRemoveCategory }) {
   const { user } = useAuth();
   const [form, setForm] = useState({});
   const [note, setNote] = useState("");
@@ -199,15 +196,20 @@ function DeliverableDialog({ open, onOpenChange, deliverable, people, categories
     try {
       if (canManage) {
         const person = people.find((p) => p.uid === form.assignedUid);
-        await updateDeliverable(deliverable.projectId, deliverable.id, {
-          category: form.category || "Other",
-          assignedUid: form.assignedUid || null,
-          assignedName: person?.name || null,
-          startDate: form.startDate || null,
-          endDate: form.endDate || null,
-          deadline: form.deadline || null,
-          instructions: form.instructions || "",
-        });
+        await updateDeliverable(
+          deliverable.projectId,
+          deliverable.id,
+          {
+            category: form.category || "Other",
+            assignedUid: form.assignedUid || null,
+            assignedName: person?.name || null,
+            startDate: form.startDate || null,
+            endDate: form.endDate || null,
+            deadline: form.deadline || null,
+            instructions: form.instructions || "",
+          },
+          user.name
+        );
         await updateDeliverableCharge(deliverable.projectId, deliverable.id, {
           charge: form.charge,
           chargeNotes: form.chargeNotes,
@@ -248,28 +250,25 @@ function DeliverableDialog({ open, onOpenChange, deliverable, people, categories
           )}
           <div>
             <Label>Status</Label>
-            <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {DELIVERABLE_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>{s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <SearchableSelect
+              value={form.status}
+              onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}
+              options={DELIVERABLE_STATUSES}
+              searchPlaceholder="Search statuses..."
+            />
           </div>
 
           {canManage ? (
-            <div>
-              <Label>Category</Label>
-              <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {categories.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <CategoryField
+              id="deliverableCategory"
+              label="Category"
+              value={form.category}
+              onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}
+              categories={categories}
+              builtIns={DEFAULT_DELIVERABLE_CATEGORIES}
+              onAdd={onAddCategory}
+              onRemove={onRemoveCategory}
+            />
           ) : (
             deliverable.category && (
               <div>
@@ -285,22 +284,20 @@ function DeliverableDialog({ open, onOpenChange, deliverable, people, categories
             <>
               <div>
                 <Label>Assigned To</Label>
-                <Select
+                <SearchableSelect
                   value={form.assignedUid || "none"}
                   onValueChange={(v) => setForm((f) => ({ ...f, assignedUid: v === "none" ? "" : v }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Unassigned">
-                      {(v) => (v === "none" || !v ? "Unassigned" : people.find((p) => p.uid === v)?.name || "Unassigned")}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Unassigned</SelectItem>
-                    {people.map((p) => (
-                      <SelectItem key={p.uid} value={p.uid}>{p.name}{p.isFreelancer ? " (Freelancer)" : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={assigneeOptions(people)}
+                  placeholder="Unassigned"
+                  searchPlaceholder="Search name or role..."
+                  emptyText="Nobody matches that"
+                  alwaysSearch
+                  renderValue={(_, v) =>
+                    v === "none" || !v
+                      ? "Unassigned"
+                      : people.find((p) => p.uid === v)?.name || "Unassigned"
+                  }
+                />
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -403,7 +400,7 @@ function DeliverableDialog({ open, onOpenChange, deliverable, people, categories
   );
 }
 
-function AddDeliverableDialog({ open, onOpenChange, project, categories, onAdded }) {
+function AddDeliverableDialog({ open, onOpenChange, project, categories, onAdded, onAddCategory, onRemoveCategory }) {
   const [type, setType] = useState("");
   const [category, setCategory] = useState(categories[0] || DEFAULT_DELIVERABLE_CATEGORIES[0]);
   const [saving, setSaving] = useState(false);
@@ -445,118 +442,19 @@ function AddDeliverableDialog({ open, onOpenChange, project, categories, onAdded
             <Label htmlFor="dtype">Name</Label>
             <Input id="dtype" value={type} onChange={(e) => setType(e.target.value)} placeholder="e.g. Teaser, Cinematic Trailer" />
           </div>
-          <div>
-            <Label htmlFor="dcategory">Category</Label>
-            <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger id="dcategory"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <CategoryField
+            id="dcategory"
+            label="Category"
+            value={category}
+            onValueChange={setCategory}
+            categories={categories}
+            builtIns={DEFAULT_DELIVERABLE_CATEGORIES}
+            onAdd={onAddCategory}
+            onRemove={onRemoveCategory}
+          />
         </div>
         <DialogFooter>
           <Button onClick={handleAdd} disabled={saving}>{saving ? "Adding..." : "Add"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** Add-category dialog, admin-only — reused wherever deliverables get
- * created (project detail page has its own copy of this same pattern
- * for expense categories). Categories are org-wide, stored on
- * orgSettings/main, so adding/removing here shows up on both pages. */
-function ManageDeliverableCategoriesDialog({ open, onOpenChange, categories, onChanged }) {
-  const [newName, setNewName] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(null);
-
-  async function handleAdd(e) {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    setSaving(true);
-    try {
-      await addCustomDeliverableCategory(newName);
-      setNewName("");
-      toast.success("Category added");
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleRemove(name) {
-    setRemoving(name);
-    try {
-      await removeCustomDeliverableCategory(name);
-      toast.success("Category removed");
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setRemoving(null);
-    }
-  }
-
-  const customCategories = categories.filter((c) => !DEFAULT_DELIVERABLE_CATEGORIES.includes(c));
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Manage Deliverable Categories</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={handleAdd} className="flex items-center gap-2">
-          <Input
-            placeholder="New category name..."
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-          />
-          <Button type="submit" size="sm" disabled={saving || !newName.trim()}>
-            {saving ? "Adding..." : "Add"}
-          </Button>
-        </form>
-        <div>
-          <p className="mb-2 text-xs font-medium text-muted-foreground">Default (cannot remove)</p>
-          <div className="flex flex-wrap gap-2">
-            {DEFAULT_DELIVERABLE_CATEGORIES.map((c) => (
-              <span key={c} className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryColor(c)}`}>
-                {c}
-              </span>
-            ))}
-          </div>
-        </div>
-        {customCategories.length > 0 && (
-          <div>
-            <p className="mb-2 text-xs font-medium text-muted-foreground">Custom</p>
-            <div className="flex flex-wrap gap-2">
-              {customCategories.map((c) => (
-                <span
-                  key={c}
-                  className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium ${categoryColor(c)}`}
-                >
-                  {c}
-                  <button
-                    type="button"
-                    onClick={() => handleRemove(c)}
-                    disabled={removing === c}
-                    className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
-                    title={`Remove ${c}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Done</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -676,74 +574,102 @@ function StorageEntryDialog({ open, onOpenChange, context, currentUid, currentNa
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-2xl">
-        <DialogHeader>
+      {/* Wider (max-w-3xl vs the old max-w-2xl) and more generously
+          padded than a typical form dialog — this one has ten fields
+          across five logical groups, and cramming that into a narrow
+          column made it feel like a wall of inputs. Section labels +
+          dividers below do the same job a multi-step wizard would, without
+          the extra clicks. */}
+      {/* sm:max-w-3xl alone doesn't beat the base Dialog's sm:max-w-md —
+          twMerge only dedupes classes that share both the same responsive
+          prefix AND property, and a bare `max-w-3xl` here is a different
+          variant from `sm:max-w-md` on the base component, so both ended
+          up in the compiled CSS and the sm: one won the cascade. Matching
+          the prefix (sm:max-w-4xl) is what actually makes this wider. */}
+      <DialogContent className="w-[95vw] sm:max-w-4xl p-6 sm:p-8">
+        <DialogHeader className="gap-1.5">
           <DialogTitle>{existing ? "Storage Entry Details" : "Storage Entry"}</DialogTitle>
+          <p className="text-sm text-muted-foreground">{event.eventName} — {member.role || "Team"}</p>
+          {existing && (
+            <p className="text-xs text-muted-foreground">
+              Logged by {existing.loggedBy || "someone"}{existing.createdAt ? ` · ${fmtDate(existing.createdAt)}` : ""}
+            </p>
+          )}
         </DialogHeader>
-        <p className="-mt-2 text-sm text-muted-foreground">{event.eventName} — {member.role || "Team"}</p>
-        {existing && (
-          <p className="-mt-2 text-xs text-muted-foreground">
-            Logged by {existing.loggedBy || "someone"}{existing.createdAt ? ` · ${fmtDate(existing.createdAt)}` : ""}
-          </p>
-        )}
-        <div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <Label>Team Member</Label>
-              <Input value={member.name} disabled />
-            </div>
-            <div>
-              <Label>Date</Label>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <div className="flex max-h-[70vh] flex-col gap-6 overflow-y-auto pr-2">
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Details</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label>Team Member</Label>
+                <Input value={member.name} disabled />
+              </div>
+              <div>
+                <Label>Date</Label>
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
             </div>
           </div>
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <Label className="mb-0">Cards & Data Size</Label>
+
+          <div className="flex flex-col gap-3 border-t border-border pt-6">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cards & Data Size</p>
               <Button type="button" size="sm" variant="secondary" onClick={() => setCards((prev) => [...prev, { label: "", gb: "" }])}>
                 <Plus className="h-3.5 w-3.5" /> Add Card
               </Button>
             </div>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2.5">
               {cards.map((c, i) => (
-                <div key={i} className="flex gap-2">
+                <div key={i} className="flex gap-3">
                   <Input placeholder="Card #1 (e.g. SD-04)" value={c.label} onChange={(e) => updateCard(i, "label", e.target.value)} />
-                  <Input className="w-24" placeholder="GB" value={c.gb} onChange={(e) => updateCard(i, "gb", e.target.value)} />
+                  <Input className="w-28" placeholder="GB" value={c.gb} onChange={(e) => updateCard(i, "gb", e.target.value)} />
                 </div>
               ))}
             </div>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <Label>Main Storage</Label>
-              <Input placeholder="Drive #1 (e.g. WD-001)" value={mainStorage} onChange={(e) => setMainStorage(e.target.value)} />
-            </div>
-            <div>
-              <Label>Backup Storage</Label>
-              <Input placeholder="Backup #1 (e.g. SEA-002)" value={backupStorage} onChange={(e) => setBackupStorage(e.target.value)} />
-            </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <Label>Project File</Label>
-              <Input placeholder="e.g. Project.ppj" value={projectFile} onChange={(e) => setProjectFile(e.target.value)} />
-            </div>
-            <div>
-              <Label>Catalogue File</Label>
-              <Input placeholder="e.g. Catalogue.ptf" value={catalogueFile} onChange={(e) => setCatalogueFile(e.target.value)} />
-            </div>
-            <div>
-              <Label>Lightroom File</Label>
-              <Input placeholder="e.g. Session.lrcat" value={lightroomFile} onChange={(e) => setLightroomFile(e.target.value)} />
+
+          <div className="flex flex-col gap-3 border-t border-border pt-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Storage Drives</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label>Main Storage</Label>
+                <Input placeholder="Drive #1 (e.g. WD-001)" value={mainStorage} onChange={(e) => setMainStorage(e.target.value)} />
+              </div>
+              <div>
+                <Label>Backup Storage</Label>
+                <Input placeholder="Backup #1 (e.g. SEA-002)" value={backupStorage} onChange={(e) => setBackupStorage(e.target.value)} />
+              </div>
             </div>
           </div>
-          <div>
-            <Label>Copied By</Label>
-            <Input placeholder="Name of person who copied the data" value={copiedBy} onChange={(e) => setCopiedBy(e.target.value)} />
+
+          <div className="flex flex-col gap-3 border-t border-border pt-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">File References</p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <Label>Project File</Label>
+                <Input placeholder="e.g. Project.ppj" value={projectFile} onChange={(e) => setProjectFile(e.target.value)} />
+              </div>
+              <div>
+                <Label>Catalogue File</Label>
+                <Input placeholder="e.g. Catalogue.ptf" value={catalogueFile} onChange={(e) => setCatalogueFile(e.target.value)} />
+              </div>
+              <div>
+                <Label>Lightroom File</Label>
+                <Input placeholder="e.g. Session.lrcat" value={lightroomFile} onChange={(e) => setLightroomFile(e.target.value)} />
+              </div>
+            </div>
           </div>
-          <div>
-            <Label>Notes — optional</Label>
-            <Textarea placeholder="e.g. Card was formatted early — recovered from backup." value={notes} onChange={(e) => setNotes(e.target.value)} />
+
+          <div className="flex flex-col gap-4 border-t border-border pt-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Attribution & Notes</p>
+            <div>
+              <Label>Copied By</Label>
+              <Input placeholder="Name of person who copied the data" value={copiedBy} onChange={(e) => setCopiedBy(e.target.value)} />
+            </div>
+            <div>
+              <Label>Notes — optional</Label>
+              <Textarea placeholder="e.g. Card was formatted early — recovered from backup." value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </div>
           </div>
         </div>
         <DialogFooter>
@@ -758,29 +684,24 @@ function StorageEntryDialog({ open, onOpenChange, context, currentUid, currentNa
 /* Storage list (shared by the Projects>Storage sub-tab and top Storage)   */
 /* ---------------------------------------------------------------------- */
 
-function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage, canLog, deliverablesByProjectId }) {
+function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage, loggedMembersByEventId, currentUser, emptyMessage = "No events found." }) {
   if (events.length === 0) {
-    return <p className="text-sm text-muted-foreground">No events found.</p>;
+    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
   }
   return (
     <div className="flex flex-col gap-4">
       {events.map((ev) => {
         const day = ev.eventStartDate ? new Date(ev.eventStartDate) : null;
-        const team = ev.team || [];
 
-        // Rows come from two sources: the event's crew (Assign Team on
-        // Events) and anyone assigned to a deliverable on this project
-        // (Assigned To on Deliverables) — a post-production assignee who
-        // never shot the event still needs somewhere to log storage they
-        // received. Team entries win on name/role when someone is both.
-        const deliverableAssignees = [];
-        (deliverablesByProjectId?.get(ev.projectId) || []).forEach((d) => {
-          if (!d.assignedUid) return;
-          if (deliverableAssignees.some((a) => a.uid === d.assignedUid)) return;
-          deliverableAssignees.push({ uid: d.assignedUid, name: d.assignedName || "—", role: d.type, fromDeliverable: true });
-        });
-        const teamUids = new Set(team.map((m) => m.uid));
-        const members = [...team, ...deliverableAssignees.filter((a) => !teamUids.has(a.uid))];
+        // Rows are no longer a checklist against the event's crew or
+        // deliverable assignees — this used to pre-populate one row per
+        // team member and flag every one who hadn't logged yet as "not
+        // received", which read as an obligation list rather than a log.
+        // Now a row only exists once someone has actually logged
+        // something: it's a record of what's come in, not a roster of
+        // who owes what.
+        const members = loggedMembersByEventId?.get(ev.id) || [];
+        const alreadyLogged = currentUser && members.some((m) => m.uid === currentUser.uid);
 
         return (
           <Card key={ev.id}>
@@ -798,27 +719,17 @@ function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage, c
                     <p className="text-xs text-muted-foreground">{ev.projectName}{ev.clientName ? ` · ${ev.clientName}` : ""}</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  {members.length === 0 ? (
-                    <span className="text-xs text-muted-foreground">No team assigned</span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {members.filter((m) => entriesByKey.has(`${ev.id}_${m.uid}`)).length}/{members.length} received
-                    </span>
-                  )}
-                </div>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {members.length === 0
+                    ? "Nothing logged yet"
+                    : `${members.length} ${members.length === 1 ? "person" : "people"} logged`}
+                </span>
               </div>
 
-              {members.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No team members assigned. Assign team via the Events tab, or assign a deliverable
-                  on this project, to enable storage logging for this event.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
+              {members.length > 0 && (
+                <div className="mb-3 flex flex-col gap-2">
                   {members.map((m) => {
                     const entries = entriesByKey.get(`${ev.id}_${m.uid}`) || [];
-                    const canLogThis = canLog(ev);
                     return (
                       <div
                         key={m.uid}
@@ -828,39 +739,49 @@ function StorageEventList({ events, entriesByKey, onLogStorage, onViewStorage, c
                           <div className="flex min-w-0 items-center gap-2">
                             <AvatarInitials name={m.name} size="sm" className="h-6 w-6 shrink-0 text-[10px]" />
                             <span className="truncate text-sm text-foreground">{m.name}</span>
-                            <span className="shrink-0 text-xs text-muted-foreground">
-                              {m.role}{m.fromDeliverable ? " (Post-Production)" : ""}
-                            </span>
-                            {entries.length === 0 && <span className="shrink-0 text-xs text-rose-600">— not received yet</span>}
+                            {m.role && <span className="shrink-0 text-xs text-muted-foreground">{m.role}</span>}
                           </div>
-                          {canLogThis ? (
-                            <Button size="sm" variant="secondary" className="w-full sm:w-auto" onClick={() => onLogStorage(ev, m)}>
-                              + Log Storage
-                            </Button>
-                          ) : entries.length === 0 ? (
-                            <span className="shrink-0 text-xs text-muted-foreground">
-                              Not assigned to a deliverable on this project
-                            </span>
-                          ) : null}
+                          <Button size="sm" variant="secondary" className="w-full sm:w-auto" onClick={() => onLogStorage(ev, m)}>
+                            + Log Storage
+                          </Button>
                         </div>
-                        {entries.length > 0 && (
-                          <div className="flex flex-col gap-1 pl-8">
-                            {entries.map((entry) => (
-                              <button
-                                key={entry.id}
-                                type="button"
-                                className="self-start truncate text-xs text-emerald-700 underline-offset-2 hover:underline"
-                                onClick={() => onViewStorage(ev, m, entry)}
-                              >
-                                {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""} — logged by {entry.loggedBy || "someone"}
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                        <div className="flex flex-col gap-1 pl-8">
+                          {entries.map((entry) => (
+                            <button
+                              key={entry.id}
+                              type="button"
+                              className="self-start truncate text-xs text-emerald-700 underline-offset-2 hover:underline"
+                              onClick={() => onViewStorage(ev, m, entry)}
+                            >
+                              {entry.mainStorage}{entry.backupStorage ? ` · backup ${entry.backupStorage}` : ""} — logged by {entry.loggedBy || "someone"}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
+              )}
+
+              {/* Self-service entry point — you log your own storage
+                  under your own name. No roster, no "not received yet"
+                  pressure: this is just how any employee, on any project,
+                  logs a handoff, whether or not they're formally assigned
+                  to it. Hidden once you've already logged here, since
+                  your own row above already has a "+ Log Storage" button
+                  for a second entry if you need one. */}
+              {currentUser && !alreadyLogged && (
+                <button
+                  type="button"
+                  onClick={() => onLogStorage(ev, { uid: currentUser.uid, name: currentUser.name, role: currentUser.role })}
+                  className="flex w-full items-center justify-between gap-2 rounded-md border border-dashed border-border px-3 py-2.5 text-left text-sm text-muted-foreground transition hover:border-accent hover:text-accent"
+                >
+                  <span className="flex items-center gap-2">
+                    <AvatarInitials name={currentUser.name} size="sm" className="h-6 w-6 shrink-0 text-[10px]" />
+                    Log your own storage for this event
+                  </span>
+                  <span className="shrink-0 font-medium">+ Log Storage</span>
+                </button>
               )}
             </CardContent>
           </Card>
@@ -901,15 +822,38 @@ function personLabel(uid, people) {
 }
 
 /**
+ * Option list for every "who's doing this" picker on this page, split into
+ * Staff / Freelancers headings with the person's role or skill on the hint
+ * line — so searching "editor" or "album" finds the right people even when
+ * you can't remember the name. Always leads with an explicit Unassigned.
+ */
+function assigneeOptions(people) {
+  return [
+    { value: "none", label: "Unassigned" },
+    ...people
+      .filter((p) => !p.isFreelancer)
+      .map((p) => ({ value: p.uid, label: p.name, hint: p.role, group: "Staff" })),
+    ...people
+      .filter((p) => p.isFreelancer)
+      .map((p) => ({
+        value: p.uid,
+        label: p.name,
+        hint: `${p.role} · freelancer`,
+        group: "Freelancers",
+      })),
+  ];
+}
+
+/**
  * Assignee dropdown shared by the desktop table and mobile cards. Renders
- * the matched person's name via SelectValue's render-prop — the base-ui
- * Select otherwise falls back to printing the raw option `value` (the
- * uid) once selected, which is what showed ids like "8TVKTbnQGNaJ"
- * instead of a name.
+ * the matched person's name via the trigger's render-prop — the underlying
+ * select otherwise falls back to printing the raw option `value` (the uid)
+ * once selected, which is what showed ids like "8TVKTbnQGNaJ" instead of a
+ * name.
  */
 function AssigneeSelect({ value, people, onChange, className }) {
   return (
-    <Select
+    <SearchableSelect
       value={value || "none"}
       onValueChange={(v) => {
         const person = people.find((p) => p.uid === v);
@@ -918,21 +862,15 @@ function AssigneeSelect({ value, people, onChange, className }) {
           assignedName: v === "none" ? null : person?.name || null,
         });
       }}
-    >
-      <SelectTrigger className={cn("h-8 text-sm", className)}>
-        <SelectValue placeholder="Unassigned">
-          {(v) => (v === "none" || !v ? "Unassigned" : personLabel(v, people))}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="none">Unassigned</SelectItem>
-        {people.map((p) => (
-          <SelectItem key={p.uid} value={p.uid}>
-            {p.name}{p.isFreelancer ? " (Freelancer)" : ""}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      options={assigneeOptions(people)}
+      className={cn("h-8 text-sm", className)}
+      contentClassName="min-w-60"
+      placeholder="Unassigned"
+      searchPlaceholder="Search name or role..."
+      emptyText="Nobody matches that"
+      alwaysSearch
+      renderValue={(_, v) => (v === "none" || !v ? "Unassigned" : personLabel(v, people))}
+    />
   );
 }
 
@@ -980,11 +918,6 @@ function DeliverableCard({ d, isAdminView, onEdit, onDelete, onInlineUpdate, peo
           <div className="flex flex-wrap items-center gap-1.5">
             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT_STYLES[d.status] || "bg-muted-foreground"}`} />
             <p className="font-medium text-foreground">{d.type}</p>
-            {d.category && (
-              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${categoryColor(d.category)}`}>
-                {d.category}
-              </span>
-            )}
             {d.instructions && (
               <span title="Has instructions for assignee">
                 <FileText className="h-3 w-3 shrink-0 text-amber-600" />
@@ -1017,6 +950,20 @@ function DeliverableCard({ d, isAdminView, onEdit, onDelete, onInlineUpdate, peo
       </div>
 
       <div className="mt-3 flex flex-col gap-2.5" onClick={(e) => e.stopPropagation()}>
+        <div>
+          <p className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Status</p>
+          {canEditInline ? (
+            <SearchableSelect
+              value={d.status}
+              onValueChange={(v) => onInlineUpdate(d, { status: v })}
+              options={DELIVERABLE_STATUSES}
+              className="w-full"
+              searchPlaceholder="Search statuses..."
+            />
+          ) : (
+            <p className="text-sm text-foreground">{d.status}</p>
+          )}
+        </div>
         <div>
           <p className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Assigned To</p>
           {canEditInline ? (
@@ -1289,7 +1236,7 @@ function DeliverablesTable({
             <TableRow>
               {showProject && <TableHead>Project</TableHead>}
               <TableHead>Deliverable</TableHead>
-              <TableHead>Category</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead>Assigned To</TableHead>
               <TableHead>Start</TableHead>
               <TableHead>End</TableHead>
@@ -1346,13 +1293,26 @@ function DeliverablesTable({
                             </button>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          {d.category && (
-                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${categoryColor(d.category)}`}>
-                              {d.category}
+                        {canEditInline ? (
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <SearchableSelect
+                              value={d.status}
+                              onValueChange={(v) => onInlineUpdate(d, { status: v })}
+                              options={DELIVERABLE_STATUSES}
+                              className="w-[9.5rem]"
+                              searchPlaceholder="Search statuses..."
+                            />
+                          </TableCell>
+                        ) : (
+                          <TableCell>
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_GROUP_STYLES[d.status] || "bg-muted text-muted-foreground"}`}
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT_STYLES[d.status] || "bg-muted-foreground"}`} />
+                              {d.status}
                             </span>
-                          )}
-                        </TableCell>
+                          </TableCell>
+                        )}
                         {canEditInline ? (
                           <TableCell onClick={(e) => e.stopPropagation()}>
                             <AssigneeSelect
@@ -1411,12 +1371,23 @@ function DeliverablesTable({
 
 function PostProductionContent() {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
+  // Deep link from a project's "Post-Production" button
+  // (`/post-production?projectId=...`). Read once on mount rather than
+  // reactively — after that, clicking between projects in the picker
+  // should drive the view, not the URL falling back to a stale param.
+  const deepLinkedProjectId = useMemo(() => searchParams.get("projectId") || "", []);
   // Mirrors isProjectOps() in firestore.rules: only these roles may
   // reassign deliverables, edit dates, or delete — everyone else gets a
   // read-only view plus status/message updates via the dialog.
   const isAdminView = ["super_admin", "admin", "project_manager"].includes(user.role);
 
-  const [mainTab, setMainTab] = useState(isAdminView ? "overview" : "projects"); // overview | projects | storage
+  // A deep-linked project always lands on the Projects tab, where the
+  // detail view actually lives — regardless of which tab a plain visit
+  // would otherwise default to.
+  const [mainTab, setMainTab] = useState(
+    deepLinkedProjectId ? "projects" : isAdminView ? "overview" : "projects"
+  ); // overview | projects | storage
   const [projectSubTab, setProjectSubTab] = useState("deliverables"); // deliverables | storage
   const fyOptions = useMemo(() => getFinancialYearOptions(), []);
   const [fy, setFy] = useState(fyOptions[0].value);
@@ -1433,15 +1404,15 @@ function PostProductionContent() {
   const [allStorageEntries, setAllStorageEntries] = useState([]);
   const [people, setPeople] = useState([]);
 
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState(deepLinkedProjectId);
   const [projectSearch, setProjectSearch] = useState("");
+  const [storageSearch, setStorageSearch] = useState("");
   const [projectDeliverables, setProjectDeliverables] = useState([]);
   const [projectEvents, setProjectEvents] = useState([]);
 
   const [editingDeliverable, setEditingDeliverable] = useState(null);
   const [expandedUpdateIds, setExpandedUpdateIds] = useState(() => new Set());
   const [addDeliverableOpen, setAddDeliverableOpen] = useState(false);
-  const [manageDeliverableCategoriesOpen, setManageDeliverableCategoriesOpen] = useState(false);
   const [deliverableCategories, setDeliverableCategories] = useState(DEFAULT_DELIVERABLE_CATEGORIES);
   const [storageContext, setStorageContext] = useState(null);
 
@@ -1452,6 +1423,21 @@ function PostProductionContent() {
     } catch (err) {
       toast.error(err.message || "Failed to load deliverable categories");
     }
+  }
+
+  // Passed into CategoryField wherever a deliverable's category is
+  // edited (the deliverable dialog, the Add Deliverable dialog). Adding
+  // or removing refreshes the shared deliverableCategories list, since
+  // categories are org-wide (orgSettings/main) and both dialogs read
+  // from the same state.
+  async function handleAddDeliverableCategory(name) {
+    const result = await addCustomDeliverableCategory(name);
+    await loadDeliverableCategories();
+    return result;
+  }
+  async function handleRemoveDeliverableCategory(name) {
+    await removeCustomDeliverableCategory(name);
+    await loadDeliverableCategories();
   }
 
   // `silent` skips the setLoading(true)/(false) toggle — used for every
@@ -1524,6 +1510,7 @@ function PostProductionContent() {
     [events, fyRange]
   );
   const projectIdsInFy = useMemo(() => new Set(eventsInFy.map((e) => e.projectId)), [eventsInFy]);
+
   const projectsInFy = useMemo(
     () => projects.filter((p) => projectIdsInFy.has(p.id) || !events.some((e) => e.projectId === p.id)),
     [projects, projectIdsInFy, events]
@@ -1563,40 +1550,45 @@ function PostProductionContent() {
     return m;
   }, [allStorageEntries]);
 
-  const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
-
-  // Grouped by project so StorageEventList can look up "who's assigned
-  // to a deliverable here" per event without an O(events × deliverables)
-  // scan. The top-level Storage tab needs every project's deliverables
-  // (allDeliverables); the Projects sub-tab only ever renders one
-  // project's events, so a single-entry map from projectDeliverables is
-  // enough and avoids depending on allDeliverables being loaded/fresh.
-  const deliverablesByProjectId = useMemo(() => {
+  // Reconstructs who's been logged for, per event, from the entries
+  // themselves — every row in the Storage view now comes from here (see
+  // the "no roster" note on StorageEventList below), so this map IS the
+  // row list, not just a fallback for one edge case.
+  const loggedMembersByEventId = useMemo(() => {
     const m = new Map();
-    allDeliverables.forEach((d) => {
-      if (!m.has(d.projectId)) m.set(d.projectId, []);
-      m.get(d.projectId).push(d);
+    allStorageEntries.forEach((entry) => {
+      if (!m.has(entry.eventId)) m.set(entry.eventId, new Map());
+      const inner = m.get(entry.eventId);
+      if (!inner.has(entry.memberUid)) {
+        inner.set(entry.memberUid, {
+          uid: entry.memberUid,
+          name: entry.memberName || "—",
+          role: entry.memberRole || "",
+        });
+      }
     });
-    return m;
-  }, [allDeliverables]);
-  const selectedProjectDeliverablesById = useMemo(
-    () => (selectedProjectId ? new Map([[selectedProjectId, projectDeliverables]]) : new Map()),
-    [selectedProjectId, projectDeliverables]
-  );
+    const out = new Map();
+    m.forEach((inner, eventId) => out.set(eventId, [...inner.values()]));
+    return out;
+  }, [allStorageEntries]);
 
-  // Storage logging is event-wise, not person-wise: anyone currently
-  // assigned to a deliverable on the project can log a storage entry for
-  // ANY team member on that event (not just their own row) — the entry
-  // just records who actually logged it (mirrors
-  // isDeliverableAssigneeOfProject() in firestore.rules, which is the
-  // actual enforcement — this just keeps the button from being shown
-  // when the write would fail anyway). Admins/PMs can always log for
-  // anyone, matching isAdminView elsewhere on this page.
-  function canLogStorage(ev) {
-    if (isAdminView) return true;
-    const project = projectsById.get(ev.projectId);
-    return !!project?.assignedDeliverableUids?.includes(user.uid);
-  }
+  // Org-wide Storage tab search: across every event in the selected FY,
+  // not just the currently-open project, so it needs its own filter to
+  // avoid being a long scroll through every shoot the studio has ever
+  // done. Matches the event/project/client name, or anyone who's already
+  // logged something for that event — handy for "did Girish log his card
+  // for anything yet" style lookups.
+  const storageSearchResults = useMemo(() => {
+    const term = storageSearch.trim().toLowerCase();
+    if (!term) return eventsInFy;
+    return eventsInFy.filter((ev) => {
+      if (ev.eventName?.toLowerCase().includes(term)) return true;
+      if (ev.projectName?.toLowerCase().includes(term)) return true;
+      if (ev.clientName?.toLowerCase().includes(term)) return true;
+      const loggedHere = loggedMembersByEventId.get(ev.id) || [];
+      return loggedHere.some((m) => m.name?.toLowerCase().includes(term));
+    });
+  }, [eventsInFy, storageSearch, loggedMembersByEventId]);
 
   const storageStats = useMemo(() => {
     let allReceived = 0, partial = 0, missing = 0;
@@ -1671,7 +1663,7 @@ function PostProductionContent() {
     // write is in flight, then reconcile with a real reload.
     setProjectDeliverables((prev) => prev.map((row) => (row.id === d.id ? { ...row, ...patch } : row)));
     try {
-      await updateDeliverable(d.projectId, d.id, patch);
+      await updateDeliverable(d.projectId, d.id, patch, user.name);
       if (isAdminView) loadOrgData({ silent: true });
     } catch (err) {
       toast.error(err.message || "Failed to update deliverable");
@@ -1703,16 +1695,12 @@ function PostProductionContent() {
           <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Post-Production</h2>
           <p className="text-sm text-muted-foreground">Deliverables and storage handoff, across every project.</p>
         </div>
-        <Select value={fy} onValueChange={setFy}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue>{(v) => fyOptions.find((o) => o.value === v)?.label}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {fyOptions.map((o) => (
-              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          value={fy}
+          onValueChange={setFy}
+          options={fyOptions}
+          className="w-[140px]"
+        />
       </div>
 
       <div className="mb-6 flex gap-2">
@@ -1740,139 +1728,6 @@ function PostProductionContent() {
             <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Delivered</p><p className="mt-1 text-3xl font-semibold text-emerald-600">{statusCounts.Delivered}</p><p className="text-xs text-muted-foreground">{deliverablesInFy.length ? Math.round((statusCounts.Delivered / deliverablesInFy.length) * 100) : 0}% complete</p></CardContent></Card>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardContent className="p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">In the pipeline</p>
-                <p className="mb-3 text-lg font-semibold text-foreground">Who&apos;s doing what</p>
-                {openDeliverables.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No open deliverables. Everything in this period is delivered.</p>
-                ) : (
-                  <div className="max-h-96 overflow-x-auto overflow-y-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Client</TableHead>
-                          <TableHead>Deliverable</TableHead>
-                          <TableHead>Assigned To</TableHead>
-                          <TableHead>Message</TableHead>
-                          <TableHead>Deadline</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {openDeliverables.map((d) => {
-                          const updates = (d.updates || []).length
-                            ? [...d.updates].sort((a, b) => new Date(b.at) - new Date(a.at))
-                            : [];
-                          const latestUpdate = updates[0] || null;
-                          const extraCount = Math.max(updates.length - 1, 0);
-                          const isExpanded = expandedUpdateIds.has(d.id);
-                          const message = latestUpdate?.text || d.instructions || "";
-                          return (
-                            <TableRow key={d.id}>
-                              <TableCell className="text-foreground">{d.clientName || d.projectName}</TableCell>
-                              <TableCell className="text-muted-foreground">{d.type}</TableCell>
-                              <TableCell className={d.assignedName ? "text-foreground" : "text-muted-foreground"}>{d.assignedName || "Unassigned"}</TableCell>
-                              <TableCell className="max-w-[260px] whitespace-normal break-words text-muted-foreground">
-                                {message ? (
-                                  <div>
-                                    <span className="inline-flex items-start gap-1">
-                                      {latestUpdate ? (
-                                        <MessageSquare className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-                                      ) : (
-                                        <FileText className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
-                                      )}
-                                      <span>
-                                        {latestUpdate?.byName && (
-                                          <span className="font-medium text-foreground">{latestUpdate.byName}: </span>
-                                        )}
-                                        {message}
-                                      </span>
-                                    </span>
-                                    {extraCount > 0 && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setExpandedUpdateIds((prev) => {
-                                            const next = new Set(prev);
-                                            next.has(d.id) ? next.delete(d.id) : next.add(d.id);
-                                            return next;
-                                          })
-                                        }
-                                        className="mt-1 block text-xs font-medium text-accent hover:underline"
-                                      >
-                                        {isExpanded ? "Hide earlier updates" : `+${extraCount} more update${extraCount === 1 ? "" : "s"}`}
-                                      </button>
-                                    )}
-                                    {isExpanded && (
-                                      <div className="mt-1.5 flex flex-col gap-1.5 border-l-2 border-border pl-2">
-                                        {updates.slice(1).map((u, i) => (
-                                          <div key={i} className="text-xs">
-                                            <span className="font-medium text-foreground">{u.byName || "Someone"}</span>
-                                            <span className="text-muted-foreground"> · {fmtDate(u.at)}{u.status ? ` · moved to ${u.status}` : ""}</span>
-                                            <p className="text-muted-foreground">{u.text}</p>
-                                          </div>
-                                        ))}
-                                        {d.instructions && (
-                                          <div className="text-xs">
-                                            <span className="inline-flex items-center gap-1 font-medium text-amber-700">
-                                              <FileText className="h-3 w-3" /> Instructions
-                                            </span>
-                                            <p className="text-muted-foreground">{d.instructions}</p>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  "—"
-                                )}
-                              </TableCell>
-                              <TableCell className="text-muted-foreground">{fmtDate(d.deadline)}</TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</p>
-                <p className="mb-2 text-lg font-semibold text-foreground">Split</p>
-                {deliverablesInFy.length === 0 ? (
-                  <p className="py-10 text-center text-sm text-muted-foreground">No deliverables yet</p>
-                ) : (
-                  <>
-                    <ResponsiveContainer width="100%" height={180}>
-                      <PieChart>
-                        <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={75} paddingAngle={2}>
-                          {pieData.map((entry, i) => (
-                            <Cell key={i} fill={STATUS_COLORS[entry.name]} />
-                          ))}
-                        </Pie>
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="mt-2 flex flex-col gap-1.5 text-sm">
-                      {DELIVERABLE_STATUSES.map((s) => (
-                        <div key={s} className="flex items-center justify-between">
-                          <span className="flex items-center gap-1.5 text-muted-foreground">
-                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATUS_COLORS[s] }} />
-                            {s}
-                          </span>
-                          <span className="font-medium text-foreground">{statusCounts[s]}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
           <Card>
             <CardContent className="p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Storage</p>
@@ -1884,9 +1739,104 @@ function PostProductionContent() {
                 <Card><CardContent className="p-4 text-center"><p className="text-3xl font-semibold text-rose-600">{storageStats.missing}</p><p className="text-xs text-muted-foreground">Missing Entries</p></CardContent></Card>
               </div>
               {storageStats.missingCount > 0 && (
-                <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  {storageStats.missingCount} storage {storageStats.missingCount === 1 ? "entry is" : "entries are"} still pending from team members.
+                <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  <span className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span>
+                      <span className="font-semibold">{storageStats.missingCount} storage {storageStats.missingCount === 1 ? "entry" : "entries"}</span> are still pending from team members.
+                    </span>
+                  </span>
+                  <Button size="sm" variant="ghost" className="shrink-0 text-amber-800 hover:bg-amber-100" onClick={() => setMainTab("storage")}>
+                    Review
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Deliverables</p>
+              <p className="mb-3 text-lg font-semibold text-foreground">Where the work stands</p>
+              <div className="mb-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" /> Pending</span>
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-400" /> In Progress</span>
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Done</span>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead>Progress</TableHead>
+                    <TableHead className="text-right">% Done</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {byType.map((r) => {
+                    const pct = r.total ? Math.round((r.done / r.total) * 100) : 0;
+                    const pendingPct = r.total ? (r.pending / r.total) * 100 : 0;
+                    const progressPct = r.total ? (r.inProgress / r.total) * 100 : 0;
+                    const donePct = r.total ? (r.done / r.total) * 100 : 0;
+                    return (
+                      <TableRow key={r.type}>
+                        <TableCell className="font-medium text-foreground">{r.type}</TableCell>
+                        <TableCell className="text-right text-muted-foreground">{r.total || "—"}</TableCell>
+                        <TableCell>
+                          <div className="flex h-1.5 w-full max-w-[220px] overflow-hidden rounded-full bg-muted">
+                            {r.total ? (
+                              <>
+                                <div className="h-full bg-amber-400" style={{ width: `${pendingPct}%` }} />
+                                <div className="h-full bg-blue-400" style={{ width: `${progressPct}%` }} />
+                                <div className="h-full bg-emerald-500" style={{ width: `${donePct}%` }} />
+                              </>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">{r.total ? `${pct}%` : "0%"}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  <TableRow>
+                    <TableCell className="font-semibold text-foreground">Total</TableCell>
+                    <TableCell className="text-right font-semibold text-foreground">{deliverablesInFy.length}</TableCell>
+                    <TableCell />
+                    <TableCell className="text-right font-semibold text-foreground">—</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">In the pipeline</p>
+              <p className="mb-3 text-lg font-semibold text-foreground">Who&apos;s doing what</p>
+              {openDeliverables.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No open deliverables. Everything in this period is delivered.</p>
+              ) : (
+                <div className="flex max-h-[520px] flex-col divide-y divide-border overflow-y-auto">
+                  {openDeliverables.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-foreground">{d.assignedName || d.clientName || d.projectName}</p>
+                        <p className="truncate text-sm text-muted-foreground">{d.type}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span
+                          className={cn(
+                            "rounded-full px-3 py-1 text-xs font-medium",
+                            d.assignedName ? "bg-secondary text-secondary-foreground" : "bg-amber-50 text-amber-700"
+                          )}
+                        >
+                          {d.assignedName || "Unassigned"}
+                        </span>
+                        <Button size="sm" variant="outline" className="border-amber-200 text-amber-700 hover:bg-amber-50" onClick={() => setEditingDeliverable(d)}>
+                          {d.assignedName ? "Edit" : "Assign"}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </CardContent>
@@ -1966,8 +1916,55 @@ function PostProductionContent() {
               />
             </CardContent>
           </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</p>
+              <p className="mb-2 text-lg font-semibold text-foreground">Split</p>
+              {deliverablesInFy.length === 0 ? (
+                <p className="py-10 text-center text-sm text-muted-foreground">No deliverables yet</p>
+              ) : (
+                <div className="grid gap-6 sm:grid-cols-[220px_1fr] sm:items-center">
+                  {/* min-w-0 below guards against the same 1fr overflow
+                      trap even though nothing here is currently wide
+                      enough to trigger it. */}
+                  <div className="relative mx-auto w-full max-w-[220px]">
+                    <ResponsiveContainer width="100%" height={220}>
+                      <PieChart>
+                        <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={70} outerRadius={100} paddingAngle={2}>
+                          {pieData.map((entry, i) => (
+                            <Cell key={i} fill={STATUS_COLORS[entry.name]} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                      <p className="text-3xl font-semibold text-foreground">{deliverablesInFy.length}</p>
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Total</p>
+                    </div>
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-2 text-sm">
+                    {DELIVERABLE_STATUSES.map((s) => (
+                      <div key={s} className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-muted-foreground">
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STATUS_COLORS[s] }} />
+                          {s}
+                        </span>
+                        <span className="font-medium text-foreground">{statusCounts[s]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       ) : mainTab === "projects" ? (
+        // min-w-0 on the right pane below is load-bearing: a 1fr grid track
+        // defaults to min-width:auto, so without it the track grows to fit
+        // the deliverables table's intrinsic width instead of shrinking —
+        // which pushes the *whole page* into horizontal scroll instead of
+        // just the table (which already has its own overflow-x-auto).
         <div className="grid gap-4 md:grid-cols-[280px_1fr]">
           <div>
             <div className="relative mb-3">
@@ -1990,7 +1987,7 @@ function PostProductionContent() {
             </div>
           </div>
 
-          <div>
+          <div className="min-w-0">
             {!selectedProject ? (
               <p className="text-sm text-muted-foreground">Select a project to view its deliverables and storage log.</p>
             ) : (
@@ -2014,9 +2011,6 @@ function PostProductionContent() {
                   <>
                     {isAdminView && (
                       <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setManageDeliverableCategoriesOpen(true)}>
-                          Manage Categories
-                        </Button>
                         <Button size="sm" onClick={() => setAddDeliverableOpen(true)}>
                           <Plus className="h-4 w-4" /> Add Deliverable
                         </Button>
@@ -2040,8 +2034,8 @@ function PostProductionContent() {
                     entriesByKey={entriesByKey}
                     onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
                     onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
-                    canLog={canLogStorage}
-                    deliverablesByProjectId={selectedProjectDeliverablesById}
+                    loggedMembersByEventId={loggedMembersByEventId}
+                    currentUser={user}
                   />
                 )}
               </>
@@ -2049,14 +2043,33 @@ function PostProductionContent() {
           </div>
         </div>
       ) : (
-        <StorageEventList
-          events={eventsInFy}
-          entriesByKey={entriesByKey}
-          onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
-          onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
-          canLog={canLogStorage}
-          deliverablesByProjectId={deliverablesByProjectId}
-        />
+        <div className="flex flex-col gap-4">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-8"
+              placeholder="Search by event, project, client, or who's logged..."
+              value={storageSearch}
+              onChange={(e) => setStorageSearch(e.target.value)}
+            />
+          </div>
+          {storageSearch.trim() && (
+            <p className="text-xs text-muted-foreground">
+              {storageSearchResults.length === eventsInFy.length
+                ? `${eventsInFy.length} events`
+                : `${storageSearchResults.length} of ${eventsInFy.length} events`}
+            </p>
+          )}
+          <StorageEventList
+            events={storageSearchResults}
+            entriesByKey={entriesByKey}
+            onLogStorage={(ev, member) => setStorageContext({ event: ev, member })}
+            onViewStorage={(ev, member, entry) => setStorageContext({ event: ev, member, existingEntry: entry })}
+            loggedMembersByEventId={loggedMembersByEventId}
+            currentUser={user}
+            emptyMessage={storageSearch.trim() ? "No events match that search." : "No events found."}
+          />
+        </div>
       )}
 
       <DeliverableDialog
@@ -2067,6 +2080,8 @@ function PostProductionContent() {
         categories={deliverableCategories}
         canManage={isAdminView}
         onSaved={handleDeliverableSaved}
+        onAddCategory={handleAddDeliverableCategory}
+        onRemoveCategory={handleRemoveDeliverableCategory}
       />
       <AddDeliverableDialog
         open={addDeliverableOpen}
@@ -2074,12 +2089,8 @@ function PostProductionContent() {
         project={selectedProject}
         categories={deliverableCategories}
         onAdded={handleDeliverableSaved}
-      />
-      <ManageDeliverableCategoriesDialog
-        open={manageDeliverableCategoriesOpen}
-        onOpenChange={setManageDeliverableCategoriesOpen}
-        categories={deliverableCategories}
-        onChanged={loadDeliverableCategories}
+        onAddCategory={handleAddDeliverableCategory}
+        onRemoveCategory={handleRemoveDeliverableCategory}
       />
       <StorageEntryDialog
         open={!!storageContext}

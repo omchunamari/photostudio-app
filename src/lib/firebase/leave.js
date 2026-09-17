@@ -10,6 +10,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./client";
+import { notifyEmployee } from "./notifications";
 
 export const LEAVE_TYPES = ["Paid"];
 
@@ -133,7 +134,7 @@ function countLeaveDays(startDate, endDate) {
  * Updates a leave request's status. If approved, deducts balance.
  * If rejected, `rejectionReason` is required.
  */
-export async function decideLeaveRequest(requestId, decision, decidedByUid, leaveRequest, rejectionReason) {
+export async function decideLeaveRequest(requestId, decision, decidedByUid, leaveRequest, rejectionReason, decidedByName) {
   const updates = {
     status: decision,
     decidedAt: new Date().toISOString(),
@@ -162,5 +163,17 @@ export async function decideLeaveRequest(requestId, decision, decidedByUid, leav
       };
       await updateDoc(userRef, { leaveBalance: updatedBalance });
     }
+
+    const range =
+      leaveRequest.startDate === leaveRequest.endDate
+        ? leaveRequest.startDate
+        : `${leaveRequest.startDate} to ${leaveRequest.endDate}`;
+    await notifyEmployee(leaveRequest.employeeUid, {
+      type: "leave_approved",
+      title: "Leave approved",
+      message: decidedByName
+        ? `${decidedByName} approved your ${leaveRequest.leaveType} leave for ${range}.`
+        : `Your ${leaveRequest.leaveType} leave for ${range} was approved.`,
+    });
   }
 }

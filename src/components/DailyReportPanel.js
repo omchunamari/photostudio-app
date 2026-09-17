@@ -36,6 +36,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { formatTime12 } from "@/lib/dateIST";
 
 const ADMIN_ROLES = ["super_admin", "admin", "hr"];
 
@@ -176,7 +177,7 @@ function EmployeeReportForm() {
                 {existingReport ? (
                     <>
                         <p className="mb-2 text-xs text-slate-500">
-                            Submitted at {new Date(existingReport.submittedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            Submitted at {formatTime12(existingReport.submittedAt)}
                         </p>
                         <div className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             {existingReport.report}
@@ -393,7 +394,7 @@ function AdminReportsView() {
                                             <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
                                                 <p className="text-sm font-medium text-slate-900">{r.employeeName}</p>
                                                 <p className="text-xs text-slate-500">
-                                                    {new Date(r.submittedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                                    {formatTime12(r.submittedAt)}
                                                 </p>
                                             </div>
                                             <p className="whitespace-pre-wrap text-sm text-slate-700">{r.report}</p>
@@ -466,7 +467,7 @@ function AdminReportsView() {
                                     <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
                                         <p className="text-sm font-medium text-slate-900">{r.date}</p>
                                         <p className="text-xs text-slate-500">
-                                            {new Date(r.submittedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                            {formatTime12(r.submittedAt)}
                                         </p>
                                     </div>
                                     <p className="whitespace-pre-wrap text-sm text-slate-700">{r.report}</p>

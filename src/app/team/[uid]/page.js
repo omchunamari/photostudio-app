@@ -50,6 +50,7 @@ import {
   Check,
   X,
 } from "lucide-react";
+import { formatDateIST } from "@/lib/dateIST";
 
 function rangeOverlap(startA, endA, startB, endB) {
   if (!startA || !startB) return false;
@@ -413,7 +414,7 @@ function TeamMemberDetailContent() {
                               <div key={note.id || note.addedAt} className="text-xs text-slate-600">
                                 <span className="text-slate-800">{note.text}</span>
                                 <span className="ml-1 text-slate-400">
-                                  — {note.addedBy || "admin"}, {new Date(note.addedAt).toLocaleDateString()}
+                                  — {note.addedBy || "admin"}, {formatDateIST(note.addedAt)}
                                   {note.editedAt ? " (edited)" : ""}
                                 </span>
                               </div>
@@ -435,9 +436,9 @@ function TeamMemberDetailContent() {
                                   <EditableRow
                                     text={note.text}
                                     editedAt={note.editedAt}
-                                    meta={` — ${note.addedBy || "admin"}, ${new Date(
+                                    meta={` — ${note.addedBy || "admin"}, ${formatDateIST(
                                       note.addedAt
-                                    ).toLocaleDateString()}`}
+                                    )}`}
                                     isEditing={isEditing}
                                     editText={editText}
                                     setEditText={setEditText}
@@ -461,7 +462,7 @@ function TeamMemberDetailContent() {
                               <div key={idx} className="text-xs text-slate-600">
                                 <span className="text-slate-800">{u.text}</span>
                                 <span className="ml-1 text-slate-400">
-                                  — {new Date(u.updatedAt).toLocaleDateString()}
+                                  — {formatDateIST(u.updatedAt)}
                                 </span>
                               </div>
                             ))}

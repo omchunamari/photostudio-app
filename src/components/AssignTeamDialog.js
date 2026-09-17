@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import SearchableSelect from "@/components/ui/searchable-select";
 import AvatarInitials from "@/components/ui/avatar-initials";
 import { toast } from "sonner";
 import { AlertTriangle, X, Users2, Banknote } from "lucide-react";
@@ -46,6 +47,41 @@ const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
  *   parent (project page) can update its own local event list without a
  *   full page reload.
  */
+/**
+ * Flat option list for the "Add team member" picker, split into
+ * Employees / Freelancers headings.
+ *
+ * People already on this event stay visible but greyed out and
+ * unselectable — you used to be able to pick them and only find out on
+ * clicking Add, via an error toast. Anyone with an overlapping booking
+ * elsewhere gets a "Conflict" tag, so that shows up before you choose
+ * rather than after.
+ */
+function buildAssigneeOptions(employees, freelancers, assignedUids, conflictMap) {
+  const badgeFor = (id) => {
+    if (assignedUids.has(id)) return "Added";
+    return conflictMap[id]?.length ? "Conflict" : undefined;
+  };
+  return [
+    ...employees.map((e) => ({
+      value: `employee:${e.uid}`,
+      label: e.name,
+      hint: e.role,
+      group: "Employees",
+      disabled: assignedUids.has(e.uid),
+      badge: badgeFor(e.uid),
+    })),
+    ...freelancers.map((fl) => ({
+      value: `freelancer:${fl.id}`,
+      label: fl.name,
+      hint: `${fl.skill} · freelancer`,
+      group: "Freelancers",
+      disabled: assignedUids.has(fl.id),
+      badge: badgeFor(fl.id),
+    })),
+  ];
+}
+
 export default function AssignTeamDialog({
   open,
   onOpenChange,
@@ -276,6 +312,15 @@ export default function AssignTeamDialog({
   const selectedConflicts = selectedId ? conflictMap[selectedId] : null;
   const selectedEmployee = employees.find((e) => e.uid === selectedId);
   const selectedFreelancer = freelancers.find((f) => f.id === selectedId);
+  // One flat option list for the picker, split into Employees / Freelancers
+  // headings. People already on this event stay visible but are greyed out
+  // and unselectable — previously you could pick them and only find out on
+  // clicking Add, via an error toast. Anyone with an overlapping booking
+  // gets a "Conflict" tag so you can see it before choosing, not after.
+  const assignedUidSet = new Set((event?.team || []).map((m) => m.uid));
+  const assigneeOptions = buildAssigneeOptions(employees, freelancers, assignedUidSet, conflictMap);
+
+
   const selectedLabel = selectedEmployee
     ? `${selectedEmployee.name} (${selectedEmployee.role})`
     : selectedFreelancer
@@ -425,37 +470,18 @@ export default function AssignTeamDialog({
               </Label>
 
               <div className="mb-3">
-                <Select value={selectedKey} onValueChange={setSelectedKey}>
-                  <SelectTrigger className="w-full">
-                    {selectedLabel || <span className="text-slate-400">Select...</span>}
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.length > 0 && (
-                      <>
-                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Employees
-                        </p>
-                        {employees.map((e) => (
-                          <SelectItem key={`employee:${e.uid}`} value={`employee:${e.uid}`}>
-                            {e.name} ({e.role})
-                          </SelectItem>
-                        ))}
-                      </>
-                    )}
-                    {freelancers.length > 0 && (
-                      <>
-                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Freelancers
-                        </p>
-                        {freelancers.map((f) => (
-                          <SelectItem key={`freelancer:${f.id}`} value={`freelancer:${f.id}`}>
-                            {f.name} ({f.skill})
-                          </SelectItem>
-                        ))}
-                      </>
-                    )}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  value={selectedKey}
+                  onValueChange={setSelectedKey}
+                  options={assigneeOptions}
+                  placeholder="Select..."
+                  searchPlaceholder="Search by name, role or skill..."
+                  emptyText="Nobody matches that"
+                  alwaysSearch
+                  renderValue={() =>
+                    selectedLabel || <span className="text-slate-400">Select...</span>
+                  }
+                />
               </div>
 
               {selectedConflicts?.length > 0 && (

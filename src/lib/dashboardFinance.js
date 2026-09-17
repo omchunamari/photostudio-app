@@ -1,9 +1,6 @@
 import { getAllProjects } from "@/lib/firebase/projects";
 import { getAllQuotations } from "@/lib/firebase/quotations";
-import { getAllInvoices, sumReceived } from "@/lib/firebase/invoices";
-import { getAllEvents } from "@/lib/firebase/events";
-import { getAllExpenses } from "@/lib/firebase/expenses";
-import { getAllFreelancers } from "@/lib/firebase/freelancers";
+import { getAllInvoices, sumReceived, collectionDate } from "@/lib/firebase/invoices";
 
 // Who can see the dashboard finance widgets — mirrors isProjectOps() in
 // firestore.rules (admin/PM only). Never fire these queries for anyone
@@ -41,6 +38,7 @@ export function formatINR(n) {
 }
 
 function monthKeyOf(dateStr) {
+  if (!dateStr) return null;
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return null;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -48,11 +46,18 @@ function monthKeyOf(dateStr) {
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function last6MonthKeys() {
+/**
+ * The 12 months of the selected financial year, Apr → Mar.
+ *
+ * This used to be a hardcoded trailing-6-calendar-months window, which meant
+ * switching the FY dropdown to a past year left the chart showing the last
+ * six months of *today* — the KPI cards and the graph disagreed. Keying the
+ * chart off the same FY as everything else fixes that.
+ */
+function fyMonthKeys(startYear) {
   const keys = [];
-  const now = new Date();
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(startYear, 3 + i, 1);
     keys.push({
       key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
       label: `${MONTH_SHORT[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`,
@@ -68,19 +73,16 @@ function last6MonthKeys() {
  *
  * Shape returned:
  * {
- *   totalRevenue, projectsBooked, receivedOnBookings, outstanding, cashReceived,
- *   monthly: [{ label, amount }],   // trailing 6 calendar months, cash actually received
- *   wagesDue: [{ personName, amount }],  // sorted desc, amount > 0 only
+ *   totalRevenue, projectsBooked, receivedOnBookings, outstanding,
+ *   overCollected, cashReceived,
+ *   monthly: [{ label, amount }],   // 12 months of the selected FY, Apr→Mar
  * }
  */
 export async function loadFinanceOverview(startYear) {
-  const [projects, quotations, invoices, events, expenses, freelancers] = await Promise.all([
+  const [projects, quotations, invoices] = await Promise.all([
     getAllProjects(),
     getAllQuotations(),
     getAllInvoices(),
-    getAllEvents(),
-    getAllExpenses(),
-    getAllFreelancers(),
   ]);
 
   const quotesById = Object.fromEntries(quotations.map((q) => [q.id, q]));
@@ -96,60 +98,48 @@ export async function loadFinanceOverview(startYear) {
     return sum + (p.quotationAmount ?? quote?.total ?? 0);
   }, 0);
 
-  // Received on Bookings — paid invoices (see the "Mark Paid" toggle on
-  // each project's Invoices panel) belonging to projects booked in this FY.
+  // Received on Bookings — paid invoices (see the "Mark Paid" toggle on each
+  // project's Invoices panel) belonging to projects booked in this FY,
+  // *whenever* that money came in. Deliberately NOT date-filtered: this is
+  // the collection rate against this year's order book, so it has to pair
+  // with totalRevenue above to make Outstanding mean anything. That's the
+  // difference from Cash Received below, which is a pure cash-flow figure.
   const receivedOnBookings = sumReceived(invoices.filter((inv) => fyProjectIds.has(inv.projectId)));
   const outstanding = Math.max(0, totalRevenue - receivedOnBookings);
+  // Surfaced separately so the UI can flag it rather than silently clamping:
+  // collecting more than the booked value means a quotationAmount is stale
+  // or an invoice is tagged to the wrong project.
+  const overCollected = Math.max(0, receivedOnBookings - totalRevenue);
 
   // Cash Received / monthly trend — actual cash flow: every paid invoice
-  // (any project) whose invoice date falls in the relevant window.
+  // (any project, including ones booked in earlier years) counted against
+  // the date the money actually landed.
+  //
+  // This previously used inv.date, the date the invoice was *raised*. An
+  // invoice raised in February and collected in June was counted as
+  // February cash, which quietly misstated both the FY total and the shape
+  // of the graph. collectionDate() reads paidAt and falls back to the
+  // raised date only for legacy invoices that predate that field.
   const paidInvoices = invoices.filter((inv) => inv.status === "paid");
-  const cashReceived = sumReceived(paidInvoices.filter((inv) => inFY(inv.date, startYear)));
+  const cashReceived = sumReceived(
+    paidInvoices.filter((inv) => inFY(collectionDate(inv), startYear))
+  );
 
-  const months = last6MonthKeys();
+  const months = fyMonthKeys(startYear);
   const byMonth = Object.fromEntries(months.map((m) => [m.key, 0]));
   paidInvoices.forEach((inv) => {
-    const mk = monthKeyOf(inv.date);
+    const mk = monthKeyOf(collectionDate(inv));
     if (mk && mk in byMonth) byMonth[mk] += Number(inv.amount) || 0;
   });
   const monthly = months.map((m) => ({ label: m.label, amount: byMonth[m.key] }));
-
-  // Team Wages Due ("who you owe") — freelancer cost accrued across
-  // events (dayRate × shoot days), netted against freelancer_payout
-  // expenses already logged for that person. Mirrors the payout-suggestion
-  // logic in Analytics' Expenses tab, so the two stay consistent.
-  const loggedByPerson = {};
-  expenses
-    .filter((e) => e.type === "freelancer_payout")
-    .forEach((e) => {
-      loggedByPerson[e.personUid] = (loggedByPerson[e.personUid] || 0) + (e.amount || 0);
-    });
-
-  const accruedByPerson = {};
-  events.forEach((ev) => {
-    (ev.team || []).forEach((m) => {
-      if (m.type !== "freelancer") return;
-      const fl = freelancers.find((f) => f.id === m.uid);
-      const rate = m.dayRate || fl?.dayRate || 0;
-      if (!rate) return;
-      const days = ev.shootDays || 1;
-      if (!accruedByPerson[m.uid]) accruedByPerson[m.uid] = { personName: m.name, amount: 0 };
-      accruedByPerson[m.uid].amount += days * rate;
-    });
-  });
-
-  const wagesDue = Object.entries(accruedByPerson)
-    .map(([uid, v]) => ({ personName: v.personName, amount: v.amount - (loggedByPerson[uid] || 0) }))
-    .filter((v) => v.amount > 0)
-    .sort((a, b) => b.amount - a.amount);
 
   return {
     totalRevenue,
     projectsBooked: fyProjects.length,
     receivedOnBookings,
     outstanding,
+    overCollected,
     cashReceived,
     monthly,
-    wagesDue,
   };
 }

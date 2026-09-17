@@ -17,6 +17,7 @@ import { getISTDateStr } from "@/lib/dateIST";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { formatTime12 } from "@/lib/dateIST";
 
 export default function AttendanceCard() {
   const { user } = useAuth();
@@ -152,13 +153,13 @@ export default function AttendanceCard() {
           <div>
             <p className="text-xs text-slate-500 sm:text-sm">Check In</p>
             <p className="text-base font-semibold text-slate-900 sm:text-lg">
-              {record?.checkInTime ? new Date(record.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
+              {formatTime12(record?.checkInTime)}
             </p>
           </div>
           <div>
             <p className="text-xs text-slate-500 sm:text-sm">Check Out</p>
             <p className="text-base font-semibold text-slate-900 sm:text-lg">
-              {record?.checkOutTime ? new Date(record.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
+              {formatTime12(record?.checkOutTime)}
             </p>
           </div>
           <div>

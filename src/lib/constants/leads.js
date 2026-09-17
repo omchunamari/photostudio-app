@@ -36,9 +36,13 @@ export const LEAD_SOURCES = [
   "Instagram",
   "Facebook",
   "Website",
+  "Form",
   "Walk-in",
   "WhatsApp",
   "Google",
+  "Wedding Planner",
+  "Family Member",
+  "Friends",
   "Other",
 ];
 

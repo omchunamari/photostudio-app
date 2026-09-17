@@ -35,10 +35,15 @@ import {
   CheckCircle2,
   Clock,
   CalendarX,
+  CalendarDays,
   Download,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import Link from "next/link";
+import { formatTime12, getISTDayFromDateStr, formatDateIST } from "@/lib/dateIST";
+import { getOrgHolidays } from "@/lib/firebase/holidays";
+import { isHolidayDate } from "@/lib/holidays";
 
 // Admin marks their own attendance like any other employee now — only
 // super_admin and HR get the org-wide view/manage table below.
@@ -48,6 +53,11 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+/** Days in a given month. month is 1-indexed (matches selectedMonth below). */
+function daysInMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
 // "present"/"late" both mean the person showed up; "auto_leave"/"on_leave"
 // both mean the day is booked against leave balance. Grouping them this
 // way keeps the summary cards and CSV totals meaningful regardless of
@@ -55,10 +65,10 @@ const MONTH_NAMES = [
 const PRESENT_STATUSES = ["present", "late"];
 const LEAVE_STATUSES = ["auto_leave", "on_leave"];
 
+// Thin wrapper over the shared IST/12-hour formatter — CSV exports want a
+// bare "-" for blanks rather than the em-dash used in the UI.
 function formatTime(iso) {
-  return iso
-    ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "-";
+  return formatTime12(iso, "-");
 }
 
 function statusLabel(status) {
@@ -116,6 +126,32 @@ function AttendanceContent() {
   const [monthRecords, setMonthRecords] = useState([]);
   const [monthLoading, setMonthLoading] = useState(false);
   const [expandedEmployee, setExpandedEmployee] = useState(null);
+
+  // Org holidays are a fixed yearly-recurring list (see Settings >
+  // Holidays), so unlike attendance records they don't need refetching
+  // when the month/year selector changes — one load covers every month.
+  const [orgHolidays, setOrgHolidays] = useState([]);
+
+  useEffect(() => {
+    if (!isAdminView) return;
+    getOrgHolidays().then(setOrgHolidays);
+  }, [isAdminView]);
+
+  // Every calendar day in the selected month that's a Sunday or a
+  // configured org holiday — this is a calendar fact independent of who
+  // was marked present/on leave that day, so it doesn't come from
+  // monthRecords the way presentDays/leaveDays do.
+  const holidayDatesInMonth = useMemo(() => {
+    const total = daysInMonth(selectedYear, selectedMonth);
+    const dates = [];
+    for (let day = 1; day <= total; day++) {
+      const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const isSunday = getISTDayFromDateStr(dateStr) === 0;
+      if (isSunday || isHolidayDate(dateStr, orgHolidays)) dates.push(dateStr);
+    }
+    return dates;
+  }, [selectedYear, selectedMonth, orgHolidays]);
+  const holidayCount = holidayDatesInMonth.length;
 
   useEffect(() => {
     if (!isAdminView) return;
@@ -196,7 +232,7 @@ function AttendanceContent() {
   }
 
   function exportMonth() {
-    const headers = ["Employee", "Department", "Date", "Status", "Check In", "Check Out", "Break", "Working Hours"];
+    const headers = ["Employee", "Department", "Date", "Status", "Check In", "Check Out", "Break", "Working Hours", "Is Holiday"];
     const rows = groupedByEmployee.flatMap(([, emp]) =>
       emp.days.map((rec) => [
         emp.employeeName || "",
@@ -207,6 +243,7 @@ function AttendanceContent() {
         formatTime(rec.checkOutTime),
         formatDuration(getTotalBreakMs(rec)),
         formatDuration(rec.totalWorkingMs),
+        holidayDatesInMonth.includes(rec.date) ? "Yes" : "",
       ])
     );
     downloadCSV(`attendance-${MONTH_NAMES[selectedMonth - 1]}-${selectedYear}.csv`, headers, rows);
@@ -344,7 +381,7 @@ function AttendanceContent() {
             </>
           ) : (
             <>
-              <div className="mb-4 grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
+              <div className="mb-4 grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-5">
                 <StatCard
                   icon={Users}
                   label="Employees Tracked"
@@ -361,6 +398,12 @@ function AttendanceContent() {
                   value={monthLoading ? "-" : monthSummary.leaveMarkings}
                 />
                 <StatCard
+                  icon={CalendarDays}
+                  label="Holidays This Month"
+                  value={holidayCount}
+                  subtext="Sundays + org holidays"
+                />
+                <StatCard
                   icon={Clock}
                   label="Avg Working Hours"
                   value={monthLoading ? "-" : formatDuration(monthSummary.avgWorkingMs)}
@@ -371,6 +414,12 @@ function AttendanceContent() {
               <h3 className="mb-3 text-base font-medium text-slate-900 sm:text-lg">
                 {MONTH_NAMES[selectedMonth - 1]} {selectedYear} - All Employees
               </h3>
+              <p className="mb-3 text-xs text-muted-foreground">
+                {holidayCount} holiday{holidayCount === 1 ? "" : "s"} this month (Sundays + org holidays) ·{" "}
+                <Link href="/settings?tab=holidays" className="underline-offset-2 hover:underline">
+                  Manage holiday list
+                </Link>
+              </p>
               {monthLoading ? (
                 <p className="text-sm text-slate-500">Loading...</p>
               ) : groupedByEmployee.length === 0 ? (
@@ -385,6 +434,7 @@ function AttendanceContent() {
                           <TableHead>Department</TableHead>
                           <TableHead>Present Days</TableHead>
                           <TableHead>Leave Days</TableHead>
+                          <TableHead>Holidays</TableHead>
                           <TableHead>Avg Working</TableHead>
                           <TableHead className="text-right">Daily Log</TableHead>
                         </TableRow>
@@ -402,6 +452,7 @@ function AttendanceContent() {
                                 <TableCell className="text-muted-foreground">{emp.department}</TableCell>
                                 <TableCell>{emp.presentDays}</TableCell>
                                 <TableCell>{emp.leaveDays}</TableCell>
+                                <TableCell className="text-muted-foreground">{holidayCount}</TableCell>
                                 <TableCell>{formatDuration(emp.avgWorkingMs)}</TableCell>
                                 <TableCell className="text-right">
                                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -416,7 +467,7 @@ function AttendanceContent() {
                               </TableRow>
                               {isExpanded && (
                                 <TableRow className="hover:bg-transparent">
-                                  <TableCell colSpan={6} className="bg-muted/30 p-0">
+                                  <TableCell colSpan={7} className="bg-muted/30 p-0">
                                     <Table>
                                       <TableHeader>
                                         <TableRow>
@@ -431,7 +482,7 @@ function AttendanceContent() {
                                       <TableBody>
                                         {emp.days.map((rec) => (
                                           <TableRow key={rec.id}>
-                                            <TableCell className="font-medium text-foreground">{rec.date}</TableCell>
+                                            <TableCell className="font-medium text-foreground">{formatDateIST(rec.date)}</TableCell>
                                             <TableCell><StatusBadge status={rec.status} /></TableCell>
                                             <TableCell>{formatTime(rec.checkInTime)}</TableCell>
                                             <TableCell>{formatTime(rec.checkOutTime)}</TableCell>

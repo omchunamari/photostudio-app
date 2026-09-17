@@ -87,6 +87,7 @@ import {
   Link as LinkIcon,
   Globe,
 } from "lucide-react";
+import { formatDateTime12 } from "@/lib/dateIST";
 
 const ACTIVITY_ICONS = {
   call: Phone,
@@ -101,7 +102,7 @@ const ACTIVITY_ICONS = {
 function timeAgo(iso) {
   if (!iso) return "";
   const d = new Date(iso);
-  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} ${d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`;
+  return formatDateTime12(d);
 }
 
 function LeadDetailContent() {
@@ -330,8 +331,14 @@ function LeadDetailContent() {
 
       const projectId = await createProject(
         {
-          projectName: `${lead.clientName} - ${lead.projectType || "Project"}`,
+          // Project name is now just the client's name — the event type
+          // lives in its own field and gets its own column, so appending
+          // " - Wedding" here only made every name longer and duplicated
+          // information the list already shows.
+          projectName: lead.clientName,
+          eventType: lead.projectType || null,
           leadId: id,
+          leadName: lead.clientName,
           quotationId: sourceQuote?.id || null,
           clientName: lead.clientName,
           quotationAmount: sourceQuote?.amount ?? lead.budget ?? 0,

@@ -41,6 +41,7 @@ import {
 import { toast } from "sonner";
 import StatusBadge from "@/components/ui/status-badge";
 import { Search, Download } from "lucide-react";
+import { formatDateIST } from "@/lib/dateIST";
 
 const ADMIN_ROLES = ["super_admin", "admin", "hr"];
 
@@ -188,7 +189,7 @@ function LeaveContent() {
 
   async function handleApprove(req) {
     try {
-      await decideLeaveRequest(req.id, "approved", user.uid, req);
+      await decideLeaveRequest(req.id, "approved", user.uid, req, undefined, user.name);
       toast.success("Leave approved");
       loadData();
     } catch (err) {
@@ -207,7 +208,7 @@ function LeaveContent() {
       return;
     }
     try {
-      await decideLeaveRequest(rejectTarget.id, "rejected", user.uid, rejectTarget, rejectionReason);
+      await decideLeaveRequest(rejectTarget.id, "rejected", user.uid, rejectTarget, rejectionReason, user.name);
       toast.success("Leave rejected");
       setRejectTarget(null);
       loadData();
@@ -487,7 +488,7 @@ function LeaveContent() {
                       <span className="font-medium text-slate-900">{req.employeeName}</span>
                     )}
                     <span className="text-sm text-slate-700">
-                      {req.leaveType} <span className="text-slate-300">·</span> {req.startDate} to {req.endDate}
+                      {req.leaveType} <span className="text-slate-300">·</span> {formatDateIST(req.startDate)} to {formatDateIST(req.endDate)}
                     </span>
                   </p>
                   {req.reason && <p className="mt-0.5 text-xs text-slate-500">{req.reason}</p>}

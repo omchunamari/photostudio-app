@@ -1,4 +1,4 @@
-  @import "tailwindcss";
+@import "tailwindcss";
   @import "tw-animate-css";
   @import "shadcn/tailwind.css";
 
@@ -27,6 +27,8 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -83,6 +85,7 @@
     --sidebar-border: oklch(0.32 0.014 60);
     --sidebar-ring: oklch(0.6 0.1 65);
     --success: oklch(0.55 0.09 150);          /* forest-green #4B7A51 */
+    --warning: oklch(0.62 0.12 70);           /* amber, for "owed / due" money */
   }
 
   .dark {
@@ -117,6 +120,8 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+    --success: oklch(0.72 0.13 150);
+    --warning: oklch(0.78 0.13 75);
   }
 
   @layer base {

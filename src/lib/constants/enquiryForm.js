@@ -27,6 +27,7 @@ export const ENQUIRY_MAPS_TO_OPTIONS = [
   { value: "projectType", label: "Project Type" },
   { value: "eventDate", label: "Event Date" },
   { value: "budget", label: "Budget" },
+  { value: "source", label: "Lead Source" },
   { value: "eventDetails", label: "Notes (unlabeled)" },
 ];
 

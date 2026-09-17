@@ -1,22 +1,13 @@
 "use client";
 
 import Image from "next/image";
+import { formatDateIST, formatDateTime12 } from "@/lib/dateIST";
 
 const fmtINR = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
-const fmtDate = (iso) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-    : "";
-const fmtDateTime = (iso) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "";
+const fmtDate = (iso) => formatDateIST(iso, "");
+// Was toLocaleDateString() with hour/minute options bolted on, which silently
+// dropped the time in some engines and rendered 24-hour in others.
+const fmtDateTime = (iso) => formatDateTime12(iso, "");
 
 // Whole document renders in Times New Roman, per client request — set once
 // at the root so every child inherits it (no per-element font-serif utility

@@ -17,6 +17,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./client";
 import { getAllProjects } from "./projects";
+import { notifyEmployee } from "./notifications";
 
 /**
  * Deliverable doc shape (projects/{projectId}/deliverables/{deliverableId}):
@@ -333,13 +334,43 @@ export async function addDeliverable(project, type, category) {
   return ref.id;
 }
 
-export async function updateDeliverable(projectId, deliverableId, data) {
-  await updateDoc(doc(db, "projects", projectId, "deliverables", deliverableId), {
+/**
+ * `assignedByName` is optional — pass the current user's name so a
+ * newly-assigned employee gets a notification naming who assigned it.
+ * Omit it for updates that don't touch assignedUid (status changes,
+ * dates, etc.) — the extra read below only happens when assignment is
+ * actually part of the patch.
+ */
+export async function updateDeliverable(projectId, deliverableId, data, assignedByName) {
+  const ref = doc(db, "projects", projectId, "deliverables", deliverableId);
+
+  // Need the prior assignee to tell "reassigned to someone new" apart
+  // from "resaved the same person" — only fetched when assignment is
+  // actually changing, so ordinary status/date updates stay a single write.
+  let prior = null;
+  if ("assignedUid" in data) {
+    const snap = await getDoc(ref);
+    prior = snap.exists() ? snap.data() : null;
+  }
+
+  await updateDoc(ref, {
     ...data,
     updatedAt: new Date().toISOString(),
   });
+
   if ("assignedUid" in data) {
     await syncProjectDeliverableAssigneeUids(projectId);
+
+    if (data.assignedUid && data.assignedUid !== prior?.assignedUid) {
+      await notifyEmployee(data.assignedUid, {
+        type: "deliverable_assignment",
+        title: "New deliverable assigned",
+        message: `${assignedByName || "Someone"} assigned you "${prior?.type || "a deliverable"}"${
+          prior?.projectName ? ` for ${prior.projectName}` : ""
+        }.`,
+        projectId,
+      });
+    }
   }
 }
 

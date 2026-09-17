@@ -13,7 +13,6 @@ import {
   deleteLead,
 } from "@/lib/firebase/leads";
 import { getAllEmployees } from "@/lib/firebase/employees";
-import { ROLES } from "@/lib/constants/roles";
 import {
   LEAD_STATUSES,
   PROJECT_TYPES,
@@ -42,13 +41,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   AlertDialog,
   AlertDialogTrigger,
   AlertDialogContent,
@@ -59,7 +51,9 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+import SearchableSelect from "@/components/ui/searchable-select";
 import StatusBadge from "@/components/ui/status-badge";
+import { formatDateIST } from "@/lib/dateIST";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -106,10 +100,22 @@ function LeadsContent() {
   const router = useRouter();
   const [leads, setLeads] = useState([]);
   const [employees, setEmployees] = useState([]);
-  const projectLeaders = useMemo(
-    () => employees.filter((e) => e.role === ROLES.PROJECT_MANAGER),
-    [employees]
-  );
+  // Everyone who can be put on a lead. The "Handled By" dialog field has
+  // always offered the whole staff list, so restricting the *filter* to
+  // role === PROJECT_MANAGER meant leads assigned to anyone else were
+  // unreachable from the filter bar. Union of all active staff and whoever
+  // is already named on a lead, so historical assignments still filter even
+  // if that person's role changed or they've since left.
+  const salesExecutives = useMemo(() => {
+    const byUid = new Map();
+    employees.forEach((e) => byUid.set(e.uid, { value: e.uid, label: e.name }));
+    leads.forEach((l) => {
+      if (l.handledByUid && !byUid.has(l.handledByUid)) {
+        byUid.set(l.handledByUid, { value: l.handledByUid, label: l.handledByName || "Unknown" });
+      }
+    });
+    return [...byUid.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [employees, leads]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -297,23 +303,26 @@ function LeadsContent() {
                 <Plus className="h-3.5 w-3.5" /> New Lead
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-h-[85vh] w-[95vw] max-w-md overflow-y-auto sm:w-full">
+            <DialogContent className="max-h-[88vh] w-[95vw] overflow-y-auto sm:w-full sm:max-w-3xl">
               <DialogHeader>
                 <DialogTitle>Add New Lead</DialogTitle>
               </DialogHeader>
+              {/* Laid out three-up on desktop: the whole lead fits on one
+                  screen without scrolling, which is the point of the wider
+                  dialog. Collapses to one column on mobile. */}
               <form onSubmit={handleCreate} className="flex flex-col gap-4">
-                <div>
-                  <Label htmlFor="clientName">Client Name *</Label>
-                  <Input
-                    id="clientName"
-                    placeholder="e.g. Rohit Verma"
-                    value={form.clientName}
-                    onChange={(e) => updateForm("clientName", e.target.value)}
-                    required
-                    autoFocus
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-1">
+                    <Label htmlFor="clientName">Client Name *</Label>
+                    <Input
+                      id="clientName"
+                      placeholder="e.g. Rohit Verma"
+                      value={form.clientName}
+                      onChange={(e) => updateForm("clientName", e.target.value)}
+                      required
+                      autoFocus
+                    />
+                  </div>
                   <div>
                     <Label htmlFor="phone">Phone</Label>
                     <Input
@@ -334,17 +343,17 @@ function LeadsContent() {
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+
+                <div className="grid gap-3 sm:grid-cols-3">
                   <div>
                     <Label>Event Type</Label>
-                    <Select value={form.projectType} onValueChange={(v) => updateForm("projectType", v)}>
-                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
-                      <SelectContent>
-                        {PROJECT_TYPES.map((t) => (
-                          <SelectItem key={t} value={t}>{t}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect
+                      value={form.projectType}
+                      onValueChange={(v) => updateForm("projectType", v)}
+                      options={PROJECT_TYPES}
+                      placeholder="Select..."
+                      searchPlaceholder="Search event types..."
+                    />
                   </div>
                   <div>
                     <Label htmlFor="eventDate">Tentative Event Date</Label>
@@ -355,29 +364,19 @@ function LeadsContent() {
                       onChange={(e) => updateForm("eventDate", e.target.value)}
                     />
                   </div>
-                </div>
-                <div>
-                  <Label htmlFor="eventDetails">Event Details</Label>
-                  <Textarea
-                    id="eventDetails"
-                    placeholder="Events, days, requirements... e.g. Day 1: haldi & cocktail, Day 2: wedding"
-                    value={form.eventDetails}
-                    onChange={(e) => updateForm("eventDetails", e.target.value)}
-                    rows={3}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label>Source</Label>
-                    <Select value={form.source} onValueChange={(v) => updateForm("source", v)}>
-                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
-                      <SelectContent>
-                        {LEAD_SOURCES.map((s) => (
-                          <SelectItem key={s} value={s}>{s}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect
+                      value={form.source}
+                      onValueChange={(v) => updateForm("source", v)}
+                      options={LEAD_SOURCES}
+                      placeholder="Select..."
+                      searchPlaceholder="Search sources..."
+                    />
                   </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
                   <div>
                     <Label htmlFor="budget">Quoted Amount (₹)</Label>
                     <Input
@@ -389,34 +388,40 @@ function LeadsContent() {
                       onChange={(e) => updateForm("budget", e.target.value)}
                     />
                   </div>
+                  <div>
+                    <Label>Priority</Label>
+                    <SearchableSelect
+                      value={form.priority}
+                      onValueChange={(v) => updateForm("priority", v)}
+                      options={LEAD_PRIORITIES}
+                      placeholder="Select..."
+                    />
+                  </div>
+                  <div>
+                    <Label>Handled By</Label>
+                    <SearchableSelect
+                      value={form.handledByUid}
+                      onValueChange={(v) => updateForm("handledByUid", v)}
+                      options={employees.map((e) => ({ value: e.uid, label: e.name, hint: e.role }))}
+                      placeholder="Assign to sales exec..."
+                      searchPlaceholder="Search staff..."
+                      alwaysSearch
+                    />
+                  </div>
                 </div>
+
                 <div>
-                  <Label>Priority</Label>
-                  <Select value={form.priority} onValueChange={(v) => updateForm("priority", v)}>
-                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
-                    <SelectContent>
-                      {LEAD_PRIORITIES.map((p) => (
-                        <SelectItem key={p} value={p}>{p}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="eventDetails">Event Details</Label>
+                  <Textarea
+                    id="eventDetails"
+                    placeholder="Events, days, requirements... e.g. Day 1: haldi & cocktail, Day 2: wedding"
+                    value={form.eventDetails}
+                    onChange={(e) => updateForm("eventDetails", e.target.value)}
+                    rows={4}
+                  />
                 </div>
-                <div>
-                  <Label>Handled By</Label>
-                  <Select value={form.handledByUid} onValueChange={(v) => updateForm("handledByUid", v)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Assign to sales exec...">
-                        {(v) => employees.find((e) => e.uid === v)?.name || "Assign to sales exec..."}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {employees.map((e) => (
-                        <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex justify-end gap-2">
+
+                <div className="flex justify-end gap-2 border-t border-border pt-3">
                   <Button type="button" variant="secondary" onClick={() => setDialogOpen(false)}>
                     Cancel
                   </Button>
@@ -458,66 +463,44 @@ function LeadsContent() {
             className="pl-8"
           />
         </div>
-        <Select value={stageFilter} onValueChange={setStageFilter}>
-          <SelectTrigger className="w-full sm:w-[170px]">
-            <SelectValue>
-              {(v) => (v === "all" ? "All stages" : v)}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All stages</SelectItem>
-            {LEAD_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>{s}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-          <SelectTrigger className="w-full sm:w-[140px]">
-            <SelectValue>{(v) => (v === "all" ? "All priorities" : v)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All priorities</SelectItem>
-            {LEAD_PRIORITIES.map((p) => (
-              <SelectItem key={p} value={p}>{p}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={sourceFilter} onValueChange={setSourceFilter}>
-          <SelectTrigger className="w-full sm:w-[150px]">
-            <SelectValue>{(v) => (v === "all" ? "All sources" : v)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All sources</SelectItem>
-            {LEAD_SOURCES.map((s) => (
-              <SelectItem key={s} value={s}>{s}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={execFilter} onValueChange={setExecFilter}>
-          <SelectTrigger className="w-full sm:w-[170px]">
-            <SelectValue>
-              {(v) => (v === "all" ? "All project leaders" : projectLeaders.find((e) => e.uid === v)?.name || "All project leaders")}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All project leaders</SelectItem>
-            {projectLeaders.map((e) => (
-              <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={originFilter} onValueChange={setOriginFilter}>
-          <SelectTrigger className="w-full sm:w-[150px]">
-            <SelectValue>
-              {(v) => (v === "all" ? "All leads" : v === "form" ? "Form leads" : "Manual leads")}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All leads</SelectItem>
-            <SelectItem value="form">Form leads</SelectItem>
-            <SelectItem value="manual">Manual leads</SelectItem>
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          value={stageFilter}
+          onValueChange={setStageFilter}
+          options={[{ value: "all", label: "All stages" }, ...LEAD_STATUSES]}
+          className="w-full sm:w-[170px]"
+          searchPlaceholder="Search stages..."
+        />
+        <SearchableSelect
+          value={priorityFilter}
+          onValueChange={setPriorityFilter}
+          options={[{ value: "all", label: "All priorities" }, ...LEAD_PRIORITIES]}
+          className="w-full sm:w-[140px]"
+        />
+        <SearchableSelect
+          value={sourceFilter}
+          onValueChange={setSourceFilter}
+          options={[{ value: "all", label: "All sources" }, ...LEAD_SOURCES]}
+          className="w-full sm:w-[150px]"
+          searchPlaceholder="Search sources..."
+        />
+        <SearchableSelect
+          value={execFilter}
+          onValueChange={setExecFilter}
+          options={[{ value: "all", label: "All sales executives" }, ...salesExecutives]}
+          className="w-full sm:w-[180px]"
+          searchPlaceholder="Search sales executives..."
+          alwaysSearch
+        />
+        <SearchableSelect
+          value={originFilter}
+          onValueChange={setOriginFilter}
+          options={[
+            { value: "all", label: "All leads" },
+            { value: "form", label: "Form leads" },
+            { value: "manual", label: "Manual leads" },
+          ]}
+          className="w-full sm:w-[150px]"
+        />
         <span className="whitespace-nowrap text-xs text-muted-foreground">
           showing {filteredLeads.length} of {leads.length} leads
         </span>
@@ -562,32 +545,31 @@ function LeadsContent() {
                     <p className="text-xs text-muted-foreground">{lead.phone || lead.email || "—"}</p>
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
-                    <Select value={lead.status} onValueChange={(v) => handleStatusChange(lead, v)}>
-                      <SelectTrigger className="h-7 w-auto border-none bg-transparent p-0 shadow-none [&>svg]:ml-1">
-                        <StatusBadge status={lead.status} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {LEAD_STATUSES.map((s) => (
-                          <SelectItem key={s} value={s}>{s}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect
+                      value={lead.status}
+                      onValueChange={(v) => handleStatusChange(lead, v)}
+                      options={LEAD_STATUSES}
+                      className="h-7 w-auto border-none bg-transparent p-0 shadow-none"
+                      contentClassName="w-56"
+                      searchPlaceholder="Search stages..."
+                      renderValue={() => <StatusBadge status={lead.status} />}
+                    />
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
-                    <Select value={lead.priority || ""} onValueChange={(v) => handlePriorityChange(lead, v)}>
-                      <SelectTrigger className="h-7 w-auto border-none bg-transparent p-0 shadow-none [&>svg]:ml-1">
-                        {lead.priority ? (
+                    <SearchableSelect
+                      value={lead.priority || ""}
+                      onValueChange={(v) => handlePriorityChange(lead, v)}
+                      options={LEAD_PRIORITIES}
+                      className="h-7 w-auto border-none bg-transparent p-0 shadow-none"
+                      contentClassName="w-40"
+                      renderValue={() =>
+                        lead.priority ? (
                           <StatusBadge status={lead.priority} />
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </SelectTrigger>
-                      <SelectContent>
-                        {LEAD_PRIORITIES.map((p) => (
-                          <SelectItem key={p} value={p}>{p}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                        )
+                      }
+                    />
                   </TableCell>
                   <TableCell className="text-muted-foreground">{lead.source || "—"}</TableCell>
                   <TableCell className="text-muted-foreground">{lead.handledByName || "—"}</TableCell>
@@ -595,13 +577,13 @@ function LeadsContent() {
                   <TableCell>
                     {lead.followUpDate ? (
                       <span className={isOverdue(lead) ? "font-medium text-red-600" : "text-muted-foreground"}>
-                        {lead.followUpDate}
+                        {formatDateIST(lead.followUpDate)}
                       </span>
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{(lead.createdAt || "").slice(0, 10)}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatDateIST(lead.createdAt)}</TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
@@ -661,7 +643,7 @@ function LeadsContent() {
                 {lead.followUpDate && (
                   <p className={`text-xs ${isOverdue(lead) ? "font-medium text-red-600" : "text-muted-foreground"}`}>
                     {isOverdue(lead) ? "Follow-up overdue: " : "Follow-up: "}
-                    {lead.followUpDate}
+                    {formatDateIST(lead.followUpDate)}
                   </p>
                 )}
               </CardContent>

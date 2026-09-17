@@ -25,11 +25,12 @@ import { getAttendanceForDate } from "@/lib/firebase/attendance";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { getPendingLeaveRequests } from "@/lib/firebase/leave";
 import { getAllDevices } from "@/lib/firebase/devices";
-import { getAnnouncement, setAnnouncement, clearAnnouncement } from "@/lib/firebase/announcements";
+import { getAnnouncement, setAnnouncement, clearAnnouncement, toggleAnnouncementAck } from "@/lib/firebase/announcements";
 import { getEventsForEmployee } from "@/lib/firebase/events";
 import { getDeliverablesForEmployee } from "@/lib/firebase/deliverables";
 import { isEventPast } from "@/lib/status";
 import { FINANCE_ROLES, fyStartYearForDate, fyLabel, loadFinanceOverview } from "@/lib/dashboardFinance";
+import { formatShortDateIST, formatShortDateTime12 } from "@/lib/dateIST";
 import { toast } from "sonner";
 import {
   Users,
@@ -40,6 +41,7 @@ import {
   Megaphone,
   Pencil,
   ClipboardList,
+  ThumbsUp,
 } from "lucide-react";
 
 // Admin behaves like a regular employee on the dashboard now — they check
@@ -112,6 +114,14 @@ function DashboardContent() {
   const [editingAnnouncement, setEditingAnnouncement] = useState(false);
   const [announcementDraft, setAnnouncementDraft] = useState("");
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
+  const [ackBusy, setAckBusy] = useState(false);
+
+  const acks = announcement?.acks || {};
+  const hasAcked = Boolean(acks[user.uid]);
+  const ackCount = Object.keys(acks).length;
+  const ackNames = Object.values(acks)
+    .map((a) => a?.name)
+    .filter(Boolean);
 
   useEffect(() => {
     loadAnnouncement();
@@ -140,13 +150,36 @@ function DashboardContent() {
     setSavingAnnouncement(true);
     try {
       await setAnnouncement(text, user.uid, user.name);
-      setAnnouncementState({ text, updatedBy: user.name, updatedByUid: user.uid, updatedAt: new Date().toISOString() });
+      setAnnouncementState({ text, updatedBy: user.name, updatedByUid: user.uid, updatedAt: new Date().toISOString(), acks: {} });
       setEditingAnnouncement(false);
       toast.success("Note updated for everyone");
     } catch (err) {
       toast.error(err.message);
     } finally {
       setSavingAnnouncement(false);
+    }
+  }
+
+  /**
+   * Thumbs-up = "seen it". Optimistic so the tap feels instant; on failure we
+   * roll the local state back rather than leave a tick that never persisted.
+   */
+  async function handleToggleAck() {
+    if (!announcement || ackBusy) return;
+    const previous = announcement;
+    const nextAcks = { ...acks };
+    if (hasAcked) delete nextAcks[user.uid];
+    else nextAcks[user.uid] = { name: user.name, at: new Date().toISOString() };
+
+    setAckBusy(true);
+    setAnnouncementState({ ...announcement, acks: nextAcks });
+    try {
+      await toggleAnnouncementAck(user.uid, user.name, hasAcked);
+    } catch (err) {
+      setAnnouncementState(previous);
+      toast.error(err.message);
+    } finally {
+      setAckBusy(false);
     }
   }
 
@@ -300,13 +333,44 @@ function DashboardContent() {
                 </div>
               ) : (
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2">
+                  <div className="flex min-w-0 items-start gap-2">
                     <Megaphone className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-                    <div>
+                    <div className="min-w-0">
                       <p className="whitespace-pre-wrap text-sm font-medium text-amber-900">{announcement.text}</p>
                       <p className="mt-1 text-[11px] text-amber-700">
-                        — {announcement.updatedBy}, {new Date(announcement.updatedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                        — {announcement.updatedBy}, {formatShortDateTime12(announcement.updatedAt)}
                       </p>
+
+                      {/* "Got it" acknowledgement. Everyone can tap it; the
+                          count doubles as a read-receipt for whoever posted
+                          the note, with names on hover for the full list. */}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={handleToggleAck}
+                          disabled={ackBusy}
+                          aria-pressed={hasAcked}
+                          aria-label={hasAcked ? "Remove your acknowledgement" : "Acknowledge this note"}
+                          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition disabled:opacity-60 ${
+                            hasAcked
+                              ? "border-amber-600 bg-amber-600 text-white hover:bg-amber-700"
+                              : "border-amber-300 bg-white/70 text-amber-800 hover:bg-amber-100"
+                          }`}
+                        >
+                          <ThumbsUp className="h-3.5 w-3.5" strokeWidth={2} />
+                          {hasAcked ? "Got it" : "Mark as read"}
+                          {ackCount > 0 && (
+                            <span className={hasAcked ? "text-white/80" : "text-amber-600"}>· {ackCount}</span>
+                          )}
+                        </button>
+                        {ackCount > 0 && (
+                          <span
+                            className="truncate text-[11px] text-amber-700"
+                            title={ackNames.join(", ")}
+                          >
+                            {ackCount === 1 ? "1 person has" : `${ackCount} people have`} seen this
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   {canEditAnnouncement && (
@@ -345,8 +409,8 @@ function DashboardContent() {
 
               {isAdminView && (
                 <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
-                  <StatCard icon={Users} label="Present Today" value={adminStats.presentToday} accent="emerald" />
-                  <StatCard icon={UserX} label="Absent Today" value={adminStats.absentToday} accent="rose" />
+                  <StatCard icon={Users} label="Present Today" value={adminStats.presentToday} accent="emerald" href="/attendance" />
+                  <StatCard icon={UserX} label="Absent Today" value={adminStats.absentToday} accent="rose" href="/attendance" />
                   <StatCard icon={CalendarClock} label="Pending Leaves" value={adminStats.pendingLeaves} accent="amber" href="/leave" />
                   <StatCard icon={Smartphone} label="Pending Devices" value={adminStats.pendingDevices} accent="sky" href="/devices" />
                 </div>
@@ -487,7 +551,7 @@ function MyPostProductionPanel({ deliverables }) {
 }
 
 function fmtShortDate(d) {
-  return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  return formatShortDateIST(d);
 }
 
 const ACCENTS = {

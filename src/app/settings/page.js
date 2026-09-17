@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
@@ -68,6 +68,7 @@ import { formatMonthDay, sortByMonthDay } from "@/lib/holidays";
 import { blankEvent } from "@/lib/constants/quotations";
 import { getEnquiryFormConfig, saveEnquiryFormConfig } from "@/lib/firebase/enquiryForm";
 import { getAllEnquiryResponses } from "@/lib/firebase/enquiryResponses";
+import { formatDateTime12 } from "@/lib/dateIST";
 import {
   DEFAULT_ENQUIRY_FORM,
   ENQUIRY_FIELD_TYPES,
@@ -76,7 +77,19 @@ import {
   slugifyFieldKey,
 } from "@/lib/constants/enquiryForm";
 
+const SETTINGS_TABS = ["org", "packages", "contracts", "schedules", "holidays", "enquiryForm", "enquiryResponses"];
+
 function SettingsContent() {
+  const searchParams = useSearchParams();
+  // Deep link from elsewhere in the app (e.g. Attendance links straight to
+  // Settings > Holidays). Read once on mount — defaultValue on Tabs is
+  // uncontrolled, so this only needs to seed the initial tab, not track
+  // the URL reactively afterward.
+  const initialTab = useMemo(() => {
+    const tab = searchParams.get("tab");
+    return SETTINGS_TABS.includes(tab) ? tab : "org";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <AppShell>
       <h2 className="mb-1 font-serif text-2xl font-semibold text-foreground">Settings</h2>
@@ -84,8 +97,15 @@ function SettingsContent() {
         Your studio&rsquo;s quote defaults and reusable templates.
       </p>
 
-      <Tabs defaultValue="org">
-        <TabsList>
+      {/* Vertical tab rail. Seven tabs in a horizontal strip either wrapped
+          or scrolled off-screen; down the left they all stay visible and the
+          labels have room to read as full words. Falls back to the original
+          horizontal strip under sm, where a side rail would eat the width. */}
+      <Tabs defaultValue={initialTab} orientation="vertical" className="sm:flex-row sm:gap-6">
+        <TabsList
+          variant="line"
+          className="w-full shrink-0 flex-row overflow-x-auto sm:w-52 sm:flex-col sm:overflow-visible"
+        >
           <TabsTrigger value="org">Business &amp; Payment</TabsTrigger>
           <TabsTrigger value="packages">Packages</TabsTrigger>
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
@@ -871,10 +891,21 @@ function EnquiryFormPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publicUrl, setPublicUrl] = useState("");
+  // Raw text for each field's "Options" box, kept separate from
+  // field.options (the parsed array). Parsing on every keystroke — split
+  // on comma, trim, drop empties — ate the comma and any trailing space
+  // the moment you typed them, since the very next render immediately
+  // re-joined the now-shorter array and snapped the box back to before
+  // what you'd just typed. This lets you type freely; the raw text only
+  // gets parsed into field.options on blur.
+  const [optionsDraft, setOptionsDraft] = useState({});
 
   useEffect(() => {
     getEnquiryFormConfig().then((cfg) => {
       setForm(cfg);
+      setOptionsDraft(
+        Object.fromEntries((cfg.fields || []).map((f) => [f.id, (f.options || []).join(", ")]))
+      );
       setLoading(false);
     });
     if (typeof window !== "undefined") {
@@ -931,12 +962,20 @@ function EnquiryFormPanel() {
     setSaving(true);
     try {
       // Locked fields always stay required, regardless of what got toggled
-      // in the UI before saving.
-      const fields = form.fields.map((f) =>
-        f.locked ? { ...f, required: true } : f
-      );
+      // in the UI before saving. Also flushes optionsDraft into
+      // field.options — normally blur does this when focus moves to the
+      // Save button, but this covers a save triggered before that fires.
+      const fields = form.fields.map((f) => {
+        const next = f.locked ? { ...f, required: true } : f;
+        if (f.type !== "select" || !(f.id in optionsDraft)) return next;
+        return {
+          ...next,
+          options: optionsDraft[f.id].split(",").map((o) => o.trim()).filter(Boolean),
+        };
+      });
       await saveEnquiryFormConfig({ ...form, fields });
       setForm((f) => ({ ...f, fields }));
+      setOptionsDraft(Object.fromEntries(fields.map((f) => [f.id, (f.options || []).join(", ")])));
       toast.success("Enquiry form saved");
     } catch (err) {
       toast.error(err.message || "Failed to save");
@@ -1069,8 +1108,11 @@ function EnquiryFormPanel() {
                 <div className="ml-8">
                   <Label className="text-xs">Options (comma separated)</Label>
                   <Input
-                    value={(field.options || []).join(", ")}
+                    value={optionsDraft[field.id] ?? (field.options || []).join(", ")}
                     onChange={(e) =>
+                      setOptionsDraft((prev) => ({ ...prev, [field.id]: e.target.value }))
+                    }
+                    onBlur={(e) =>
                       updateField(field.id, {
                         options: e.target.value.split(",").map((o) => o.trim()).filter(Boolean),
                       })
@@ -1235,7 +1277,7 @@ function EnquiryResponsesPanel() {
               {filtered.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="text-muted-foreground">
-                    {(r.createdAt || "").slice(0, 16).replace("T", " ")}
+                    {formatDateTime12(r.createdAt)}
                   </TableCell>
                   <TableCell className="font-medium text-foreground">{r.clientName || "—"}</TableCell>
                   <TableCell className="text-muted-foreground">{r.phone || "—"}</TableCell>
@@ -1289,7 +1331,9 @@ export default function SettingsPage() {
   return (
     <ProtectedRoute allowedRoles={["super_admin", "admin", "project_manager"]}>
       <DeviceGate>
-        <SettingsContent />
+        <Suspense fallback={null}>
+          <SettingsContent />
+        </Suspense>
       </DeviceGate>
     </ProtectedRoute>
   );

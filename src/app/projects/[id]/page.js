@@ -17,7 +17,9 @@ import {
   addHardDisk,
   updateHardDisk,
   toggleHardDiskReceived,
+  setHardDiskStatus,
   removeHardDisk,
+  HARD_DISK_STATUSES,
 } from "@/lib/firebase/projects";
 import { createEvent, getEventsForProject, sumEventTeamCost, updateEventTeam } from "@/lib/firebase/events";
 import { getAllEmployees } from "@/lib/firebase/employees";
@@ -49,6 +51,7 @@ import {
   removeCustomExpenseCategory,
 } from "@/lib/firebase/expenses";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
+import { PROJECT_TYPES } from "@/lib/constants/leads";
 import { isEventPast } from "@/lib/status";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -69,6 +72,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogTrigger,
@@ -80,13 +84,20 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+import SearchableSelect from "@/components/ui/searchable-select";
+import CategoryField from "@/components/CategoryField";
 import StatusBadge from "@/components/ui/status-badge";
+import { formatDateIST } from "@/lib/dateIST";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown, HardDrive } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown, HardDrive, FileText, Wallet, UserSquare2 } from "lucide-react";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
 function formatDate(dateStr) {
+  return formatDateIST(dateStr);
+}
+
+function _legacyFormatDate(dateStr) {
   if (!dateStr) return "—";
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return "—";
@@ -119,6 +130,27 @@ function categoryColor(category) {
   let hash = 0;
   for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
   return FALLBACK_CATEGORY_PALETTE[hash % FALLBACK_CATEGORY_PALETTE.length];
+}
+
+// Deterministic initials + color per team member, for the small avatar
+// chips on the Events timeline (mirrors categoryColor's hash approach).
+const AVATAR_COLOR_PALETTE = [
+  "bg-violet-100 text-violet-700",
+  "bg-blue-100 text-blue-700",
+  "bg-emerald-100 text-emerald-700",
+  "bg-amber-100 text-amber-700",
+  "bg-rose-100 text-rose-700",
+  "bg-cyan-100 text-cyan-700",
+];
+function initials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || name[0].toUpperCase();
+}
+function avatarColor(name) {
+  let hash = 0;
+  for (let i = 0; i < (name || "").length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLOR_PALETTE[hash % AVATAR_COLOR_PALETTE.length];
 }
 
 /** Category-wise deliverables list — one collapsed-by-default card per
@@ -225,13 +257,15 @@ function ProjectDetailContent() {
   const [savingDeliverable, setSavingDeliverable] = useState(false);
   const [deletingDeliverableId, setDeletingDeliverableId] = useState(null);
   const [deliverableCategories, setDeliverableCategories] = useState(DEFAULT_DELIVERABLE_CATEGORIES);
-  const [manageDeliverableCategoriesOpen, setManageDeliverableCategoriesOpen] = useState(false);
-  const [newDeliverableCategoryName, setNewDeliverableCategoryName] = useState("");
-  const [savingDeliverableCategory, setSavingDeliverableCategory] = useState(false);
-  const [removingDeliverableCategory, setRemovingDeliverableCategory] = useState(null);
-  const [hddForm, setHddForm] = useState({ label: "", capacityGB: "" });
+  const [hddForm, setHddForm] = useState({
+    label: "",
+    capacityGB: "",
+    eventId: "",
+    status: HARD_DISK_STATUSES[0],
+  });
   const [savingHdd, setSavingHdd] = useState(false);
   const [togglingHddId, setTogglingHddId] = useState(null);
+  const [updatingHddStatusId, setUpdatingHddStatusId] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -250,6 +284,7 @@ function ProjectDetailContent() {
 
   const [detailsForm, setDetailsForm] = useState({
     projectName: "",
+    eventType: "",
   });
   const [savingDetails, setSavingDetails] = useState(false);
 
@@ -274,10 +309,6 @@ function ProjectDetailContent() {
   const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
   const [savingExpense, setSavingExpense] = useState(false);
   const [expenseCategories, setExpenseCategories] = useState(MANUAL_EXPENSE_CATEGORIES);
-  const [manageCategoriesOpen, setManageCategoriesOpen] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState("");
-  const [savingCategory, setSavingCategory] = useState(false);
-  const [removingCategory, setRemovingCategory] = useState(null);
   const [expenseForm, setExpenseForm] = useState({
     category: MANUAL_EXPENSE_CATEGORIES[0],
     amount: "",
@@ -299,7 +330,7 @@ function ProjectDetailContent() {
         return;
       }
 
-      setDetailsForm({ projectName: p.projectName || "" });
+      setDetailsForm({ projectName: p.projectName || "", eventType: p.eventType || "" });
       const evts = await getEventsForProject(id);
       setEvents(evts);
 
@@ -355,7 +386,7 @@ function ProjectDetailContent() {
     setSavingLeader(true);
     try {
       const emp = uid === "none" ? null : employees.find((e) => e.uid === uid);
-      await setProjectLeader(id, emp?.uid || null, emp?.name || null);
+      await setProjectLeader(id, emp?.uid || null, emp?.name || null, user.name);
       setProject((prev) => ({ ...prev, leaderUid: emp?.uid || null, leaderName: emp?.name || null }));
       toast.success(emp ? `${emp.name} set as Project Leader` : "Project Leader cleared");
     } catch (err) {
@@ -369,7 +400,10 @@ function ProjectDetailContent() {
     e.preventDefault();
     setSavingDetails(true);
     try {
-      await updateProjectDetails(id, { projectName: detailsForm.projectName });
+      await updateProjectDetails(id, {
+        projectName: detailsForm.projectName,
+        eventType: detailsForm.eventType || null,
+      });
       toast.success("Project details updated");
       loadData();
     } catch (err) {
@@ -406,33 +440,19 @@ function ProjectDetailContent() {
     }
   }
 
-  async function handleAddDeliverableCategory(e) {
-    e.preventDefault();
-    if (!newDeliverableCategoryName.trim()) return;
-    setSavingDeliverableCategory(true);
-    try {
-      const next = await addCustomDeliverableCategory(newDeliverableCategoryName);
-      setDeliverableCategories([...DEFAULT_DELIVERABLE_CATEGORIES, ...next]);
-      setNewDeliverableCategoryName("");
-      toast.success("Category added");
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingDeliverableCategory(false);
-    }
+  // These four take a plain name and let errors propagate: CategoryField
+  // owns the pending/error state and shows failures inline next to the
+  // input, which is more useful than a toast that covers the dialog.
+  async function handleAddDeliverableCategory(name) {
+    const next = await addCustomDeliverableCategory(name);
+    setDeliverableCategories([...DEFAULT_DELIVERABLE_CATEGORIES, ...next]);
   }
 
   async function handleRemoveDeliverableCategory(name) {
-    setRemovingDeliverableCategory(name);
-    try {
-      const next = await removeCustomDeliverableCategory(name);
-      setDeliverableCategories([...DEFAULT_DELIVERABLE_CATEGORIES, ...next]);
-      toast.success("Category removed");
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setRemovingDeliverableCategory(null);
-    }
+    const next = await removeCustomDeliverableCategory(name);
+    setDeliverableCategories([...DEFAULT_DELIVERABLE_CATEGORIES, ...next]);
+    // Never leave the form pointing at a category that no longer exists.
+    setNewDeliverableCategory((c) => (c === name ? DEFAULT_DELIVERABLE_CATEGORIES[0] : c));
   }
 
   async function handleDeleteDeliverable(d) {
@@ -469,9 +489,11 @@ function ProjectDetailContent() {
       const entry = await addHardDisk(id, {
         label: hddForm.label.trim(),
         capacityGB: hddForm.capacityGB ? Number(hddForm.capacityGB) : null,
+        eventId: hddForm.eventId || null,
+        status: hddForm.status,
       });
       setProject((prev) => ({ ...prev, hardDisks: [...(prev.hardDisks || []), entry] }));
-      setHddForm({ label: "", capacityGB: "" });
+      setHddForm({ label: "", capacityGB: "", eventId: "", status: HARD_DISK_STATUSES[0] });
       toast.success("Hard disk added");
     } catch (err) {
       toast.error(err.message);
@@ -496,6 +518,30 @@ function ProjectDetailContent() {
       toast.error(err.message);
     } finally {
       setTogglingHddId(null);
+    }
+  }
+
+  async function handleUpdateHardDiskStatus(diskId, status) {
+    setUpdatingHddStatusId(diskId);
+    try {
+      await setHardDiskStatus(id, diskId, status);
+      setProject((prev) => ({
+        ...prev,
+        hardDisks: (prev.hardDisks || []).map((d) =>
+          d.id === diskId
+            ? {
+                ...d,
+                status,
+                received: status === "Received",
+                receivedAt: status === "Received" ? new Date().toISOString() : null,
+              }
+            : d
+        ),
+      }));
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setUpdatingHddStatusId(null);
     }
   }
 
@@ -653,9 +699,14 @@ function ProjectDetailContent() {
 
   async function handleToggleInvoiceStatus(inv) {
     const nextStatus = inv.status === "paid" ? "unpaid" : "paid";
+    // Mirror the paidAt stamp setInvoiceStatus writes, so the optimistic
+    // local row matches what's in Firestore without a refetch.
+    const nextPaidAt = nextStatus === "paid" ? new Date().toISOString().slice(0, 10) : null;
     try {
-      await setInvoiceStatus(inv.id, nextStatus);
-      setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: nextStatus } : i)));
+      await setInvoiceStatus(inv.id, nextStatus, nextPaidAt);
+      setInvoices((prev) =>
+        prev.map((i) => (i.id === inv.id ? { ...i, status: nextStatus, paidAt: nextPaidAt } : i))
+      );
       toast.success(nextStatus === "paid" ? "Marked as paid" : "Marked as unpaid");
     } catch (err) {
       toast.error(err.message);
@@ -720,36 +771,19 @@ function ProjectDetailContent() {
     }
   }
 
-  async function handleAddCategory(e) {
-    e.preventDefault();
-    if (!newCategoryName.trim()) return;
-    setSavingCategory(true);
-    try {
-      const next = await addCustomExpenseCategory(newCategoryName);
-      setExpenseCategories([...MANUAL_EXPENSE_CATEGORIES, ...next]);
-      setNewCategoryName("");
-      toast.success("Category added");
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSavingCategory(false);
-    }
+  async function handleAddCategory(name) {
+    const next = await addCustomExpenseCategory(name);
+    setExpenseCategories([...MANUAL_EXPENSE_CATEGORIES, ...next]);
   }
 
   async function handleRemoveCategory(name) {
-    setRemovingCategory(name);
-    try {
-      const next = await removeCustomExpenseCategory(name);
-      setExpenseCategories([...MANUAL_EXPENSE_CATEGORIES, ...next]);
-      // If the expense form currently has this category selected, fall
-      // back to the first default so it never points at a removed value.
-      setExpenseForm((p) => (p.category === name ? { ...p, category: MANUAL_EXPENSE_CATEGORIES[0] } : p));
-      toast.success("Category removed");
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setRemovingCategory(null);
-    }
+    const next = await removeCustomExpenseCategory(name);
+    setExpenseCategories([...MANUAL_EXPENSE_CATEGORIES, ...next]);
+    // If the expense form currently has this category selected, fall back
+    // to the first default so it never points at a removed value.
+    setExpenseForm((p) =>
+      p.category === name ? { ...p, category: MANUAL_EXPENSE_CATEGORIES[0] } : p
+    );
   }
 
   if (loading) {
@@ -794,28 +828,47 @@ function ProjectDetailContent() {
           bar doesn't exist so the header can stick flush to top-0. */}
       <div className="sticky top-14 z-10 mb-6 flex flex-col gap-3 border-b border-slate-200 bg-white py-3 sm:flex-row sm:items-center sm:justify-between md:top-0">
         <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">
+          <h2 className="truncate font-heading text-2xl font-semibold text-slate-900 sm:text-3xl">
             {project.projectName}
           </h2>
-          <p className="text-sm text-slate-500">{project.clientName}</p>
+          <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-slate-500">
+            {/* Client name IS the lead name — the project is created from the
+                lead and carries its name across. When the project came from a
+                lead, that name links back to it so the full enquiry history,
+                quotes and call log stay one click away. */}
+            {project.leadId ? (
+              <Link
+                href={`/leads/${project.leadId}`}
+                className="inline-flex items-center gap-1 font-medium text-slate-700 underline-offset-2 hover:text-foreground hover:underline"
+              >
+                <UserSquare2 className="h-3.5 w-3.5" />
+                {project.leadName || project.clientName}
+              </Link>
+            ) : (
+              <span>{project.clientName}</span>
+            )}
+            {project.eventType ? <span>· {project.eventType}</span> : null}
+            {events.length > 0 ? (
+              <span>· {events.length} event{events.length === 1 ? "" : "s"}</span>
+            ) : null}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge status={project.status} />
+          <StatusBadge status={project.status} className="h-7 px-3 text-[13px]" />
           <Link href={`/post-production?projectId=${project.id}`}>
-            <Button size="sm" variant="secondary">Post-Production</Button>
+            <Button size="sm" variant="secondary" className="rounded-full">Post-Production</Button>
           </Link>
-          <Select value={project.status} onValueChange={handleStatusChange}>
-            <SelectTrigger className="h-8 w-36 text-xs sm:w-40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {PROJECT_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>{s}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchableSelect
+            value={project.status}
+            onValueChange={handleStatusChange}
+            options={PROJECT_STATUSES}
+            className="h-8 w-36 rounded-full text-xs sm:w-40"
+            searchPlaceholder="Search statuses..."
+          />
 
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="sm">
+              <Button size="sm" className="rounded-full">
                 <Plus className="h-4 w-4" /> Add Event
               </Button>
             </DialogTrigger>
@@ -902,93 +955,109 @@ function ProjectDetailContent() {
         </div>
       </div>
 
-      {/* --- Financial summary cards --- */}
+      {/* --- Financial summary: hero Net Profit + payments bar, then a
+          Package / Team Cost / Other Expenses row underneath. --- */}
       {isAdminOrPM && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="mb-6 flex flex-col gap-3">
           <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-slate-500">Package</p>
-              {editingPackage ? (
-                <p className="mt-1 flex items-center gap-1 text-lg font-semibold text-slate-900">
-                  ₹
-                  <input
-                    autoFocus
-                    type="number"
-                    min="0"
-                    value={editingPackageValue}
-                    onChange={(e) => setEditingPackageValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.currentTarget.blur();
-                      } else if (e.key === "Escape") {
-                        setEditingPackage(false);
-                      }
-                    }}
-                    onBlur={() => {
-                      setEditingPackage(false);
-                      if (editingPackageValue !== String(project.quotationAmount || 0)) {
-                        handleUpdatePackageAmount(editingPackageValue);
-                      }
-                    }}
-                    disabled={savingPackage}
-                    className="w-24 border-b border-slate-300 bg-transparent text-lg font-semibold text-slate-900 outline-none focus:border-slate-900"
+            <CardContent className="flex flex-col gap-6 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Net Profit</p>
+                <p className="mt-1 font-heading text-4xl font-semibold text-emerald-600">{inr(netProfit)}</p>
+                <span className="mt-2 inline-block rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                  {marginPct}% margin
+                </span>
+              </div>
+              <div className="flex-1 sm:max-w-md sm:pl-8 sm:border-l sm:border-slate-200">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-slate-700">Payments collected</span>
+                  <span className="text-slate-500">
+                    {inr(received)} of {inr(packageAmount)}
+                  </span>
+                </div>
+                <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-red-100">
+                  <div
+                    className="h-full rounded-full bg-emerald-500"
+                    style={{ width: `${Math.min(receivedPct, 100)}%` }}
                   />
-                </p>
-              ) : (
-                <button
-                  type="button"
-                  disabled={!isAdminOrPM}
-                  onClick={() => {
-                    if (!isAdminOrPM) return;
-                    setEditingPackageValue(String(project.quotationAmount || 0));
-                    setEditingPackage(true);
-                  }}
-                  title={isAdminOrPM ? "Click to edit package amount" : undefined}
-                  className={`mt-1 block text-left text-lg font-semibold text-slate-900 ${
-                    isAdminOrPM ? "rounded hover:bg-slate-50" : ""
-                  }`}
-                >
-                  {inr(packageAmount)}
-                </button>
-              )}
-              <p className="text-[11px] text-slate-400">100% (base)</p>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" /> Received — {inr(received)} ({receivedPct}%)
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-red-400" /> Balance due — {inr(balanceDue)} ({balancePct}%)
+                  </span>
+                </div>
+              </div>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-slate-500">Received</p>
-              <p className="mt-1 text-lg font-semibold text-emerald-600">{inr(received)}</p>
-              <p className="text-[11px] text-slate-400">{receivedPct}% collected</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-slate-500">Balance Due</p>
-              <p className="mt-1 text-lg font-semibold text-red-600">{inr(balanceDue)}</p>
-              <p className="text-[11px] text-slate-400">{balancePct}% pending</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-slate-500">Team Cost</p>
-              <p className="mt-1 text-lg font-semibold text-amber-600">{inr(teamCost)}</p>
-              <p className="text-[11px] text-slate-400">{teamCostPct}% of package</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-slate-500">Other Expenses</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{inr(otherExpensesTotal)}</p>
-              <p className="text-[11px] text-slate-400">{otherExpensesPct}% of package</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-slate-500">Net Profit</p>
-              <p className="mt-1 text-lg font-semibold text-emerald-700">{inr(netProfit)}</p>
-              <p className="text-[11px] text-slate-400">{marginPct}% margin</p>
-            </CardContent>
-          </Card>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Package</p>
+                {editingPackage ? (
+                  <p className="mt-1 flex items-center gap-1 text-xl font-semibold text-slate-900">
+                    ₹
+                    <input
+                      autoFocus
+                      type="number"
+                      min="0"
+                      value={editingPackageValue}
+                      onChange={(e) => setEditingPackageValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.currentTarget.blur();
+                        } else if (e.key === "Escape") {
+                          setEditingPackage(false);
+                        }
+                      }}
+                      onBlur={() => {
+                        setEditingPackage(false);
+                        if (editingPackageValue !== String(project.quotationAmount || 0)) {
+                          handleUpdatePackageAmount(editingPackageValue);
+                        }
+                      }}
+                      disabled={savingPackage}
+                      className="w-28 border-b border-slate-300 bg-transparent text-xl font-semibold text-slate-900 outline-none focus:border-slate-900"
+                    />
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!isAdminOrPM}
+                    onClick={() => {
+                      if (!isAdminOrPM) return;
+                      setEditingPackageValue(String(project.quotationAmount || 0));
+                      setEditingPackage(true);
+                    }}
+                    title={isAdminOrPM ? "Click to edit package amount" : undefined}
+                    className={`mt-1 block text-left text-xl font-semibold text-slate-900 ${
+                      isAdminOrPM ? "rounded hover:bg-slate-50" : ""
+                    }`}
+                  >
+                    {inr(packageAmount)}
+                  </button>
+                )}
+                <p className="text-xs text-slate-400">100% base value</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Team Cost</p>
+                <p className="mt-1 text-xl font-semibold text-slate-900">{inr(teamCost)}</p>
+                <p className="text-xs text-slate-400">{teamCostPct}% of package</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Other Expenses</p>
+                <p className="mt-1 text-xl font-semibold text-slate-900">{inr(otherExpensesTotal)}</p>
+                <p className="text-xs text-slate-400">{otherExpensesPct}% of package</p>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
 
@@ -1005,8 +1074,19 @@ function ProjectDetailContent() {
                   id="projectName"
                   className="h-8"
                   value={detailsForm.projectName}
-                  onChange={(e) => setDetailsForm({ projectName: e.target.value })}
+                  onChange={(e) => setDetailsForm((p) => ({ ...p, projectName: e.target.value }))}
                   required
+                />
+              </div>
+              <div className="w-36">
+                <Label className="text-xs text-slate-500">Event Type</Label>
+                <SearchableSelect
+                  value={detailsForm.eventType}
+                  onValueChange={(v) => setDetailsForm((p) => ({ ...p, eventType: v }))}
+                  options={PROJECT_TYPES}
+                  placeholder="Select..."
+                  className="h-8"
+                  searchPlaceholder="Search..."
                 />
               </div>
               <Button type="submit" size="sm" disabled={savingDetails}>
@@ -1065,14 +1145,15 @@ function ProjectDetailContent() {
               <CardContent className="p-4 sm:p-5">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-medium text-slate-900">Invoices</h3>
+                    <FileText className="h-4 w-4 text-slate-400" />
+                    <h3 className="font-heading text-lg font-semibold text-slate-900">Invoices</h3>
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
                       New
                     </span>
                   </div>
                   <Dialog open={invoiceDialogOpen} onOpenChange={setInvoiceDialogOpen}>
                     <DialogTrigger asChild>
-                      <Button size="sm" onClick={openInvoiceDialog}>
+                      <Button size="sm" className="rounded-full" onClick={openInvoiceDialog}>
                         <Plus className="h-4 w-4" /> New Invoice
                       </Button>
                     </DialogTrigger>
@@ -1163,7 +1244,7 @@ function ProjectDetailContent() {
                       >
                         <div className="min-w-0">
                           <p className="font-medium text-slate-900">
-                            {inv.invoiceNumber} · {inv.date}
+                            {inv.invoiceNumber} · {formatDateIST(inv.date)}
                           </p>
                           <p className="text-sm text-slate-500">{inr(inv.amount)}</p>
                         </div>
@@ -1190,135 +1271,182 @@ function ProjectDetailContent() {
             </Card>
           )}
 
-          {/* --- Events --- */}
+          {/* --- Events --- date-block timeline: each event gets a
+              month/day tile on a connecting vertical line, a card with
+              per-member avatar chips, and a Team Cost + Manage Team footer. */}
           <div>
-            <h3 className="mb-2 text-base font-medium text-slate-900 sm:text-lg">Events</h3>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-heading text-lg font-semibold text-slate-900 sm:text-xl">Events</h3>
+              {events.length > 0 && (
+                <p className="text-xs text-slate-500 sm:text-sm">
+                  {events.length} event{events.length === 1 ? "" : "s"} · {inr(teamCost)} total team cost
+                </p>
+              )}
+            </div>
             {events.length === 0 ? (
               <p className="text-sm text-slate-500">No events yet. Add one to start assigning a team.</p>
             ) : (
-              <ol className="relative ml-3 flex flex-col gap-5 border-l-2 border-slate-200 pl-6">
+              <ol className="relative flex flex-col gap-5">
                 {[...events]
                   .sort((a, b) =>
                     (a.eventStartDate || "").localeCompare(b.eventStartDate || "") ||
                     (a.createdAt || "").localeCompare(b.createdAt || "")
                   )
-                  .map((ev) => {
+                  .map((ev, idx, arr) => {
                     const done = isEventPast(ev);
                     const evCost = sumEventTeamCost(ev.team);
                     const assignedCount = ev.team?.length || 0;
+                    const start = ev.eventStartDate ? new Date(ev.eventStartDate) : null;
+                    const month = start && !Number.isNaN(start.getTime())
+                      ? start.toLocaleDateString("en-IN", { month: "short" }).toUpperCase()
+                      : "—";
+                    const day = start && !Number.isNaN(start.getTime()) ? start.getDate() : "–";
+                    const dayCount =
+                      ev.eventStartDate && ev.eventEndDate
+                        ? Math.max(
+                            1,
+                            Math.round(
+                              (new Date(ev.eventEndDate) - new Date(ev.eventStartDate)) / 86400000
+                            ) + 1
+                          )
+                        : ev.shootDays || 1;
                     return (
-                      <li key={ev.id} className="relative">
-                        <span
-                          className={`absolute -left-[31px] top-1.5 h-3.5 w-3.5 rounded-full border-2 ${
-                            done
-                              ? "border-emerald-600 bg-emerald-600"
-                              : "border-slate-400 bg-white"
-                          }`}
-                        />
-                        <Card className="transition hover:border-slate-300">
-                          <CardContent className="p-3">
+                      <li key={ev.id} className="relative flex gap-4">
+                        {/* Date tile + connecting line */}
+                        <div className="flex shrink-0 flex-col items-center">
+                          <div
+                            className={`flex w-16 flex-col items-center justify-center rounded-lg border py-2 ${
+                              done
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                : "border-slate-200 bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            <span className="text-[10px] font-semibold tracking-wide">{month}</span>
+                            <span className="font-heading text-xl font-semibold leading-none">{day}</span>
+                          </div>
+                          {idx < arr.length - 1 && (
+                            <span className="mt-1 w-px flex-1 bg-slate-200" aria-hidden="true" />
+                          )}
+                        </div>
+
+                        <Card className="mb-1 flex-1 transition hover:border-slate-300">
+                          <CardContent className="p-4">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                              <Link href={`/projects/${id}/events/${ev.id}`} className="min-w-0 flex-1 sm:pt-0.5">
-                                <div className="flex items-center gap-2">
-                                  <p className="truncate font-medium text-slate-900">{ev.eventName}</p>
-                                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                                    {assignedCount > 0 ? "Assigned" : "Not Assigned"}
-                                  </span>
-                                </div>
+                              <Link href={`/projects/${id}/events/${ev.id}`} className="min-w-0 flex-1">
+                                <p className="truncate font-heading text-base font-semibold text-slate-900">
+                                  {ev.eventName}
+                                </p>
                                 <p className="truncate text-xs text-slate-500">
-                                  {ev.eventStartDate
-                                    ? ev.eventStartDate === ev.eventEndDate
-                                      ? ev.eventStartDate
-                                      : `${ev.eventStartDate} – ${ev.eventEndDate}`
-                                    : "No date set"}{" "}
-                                  · {ev.shootDays || 1} day{ev.shootDays !== 1 && "s"} · {assignedCount} assigned
+                                  {dayCount} day{dayCount !== 1 && "s"} · {assignedCount} of{" "}
+                                  {assignedCount || 0} assigned
                                 </p>
                               </Link>
-                              {/*
-                                Alignment fix: cost / status / Assign button used
-                                to sit in a plain flex row, so a longer status
-                                label (e.g. "In Progress" vs "Done") shifted the
-                                Assign button left/right on different cards.
-                                Giving the status a fixed-width centered slot
-                                (and matching width on the button) keeps every
-                                Assign button in the same horizontal position
-                                regardless of status text length.
-                              */}
                               <div className="flex shrink-0 flex-wrap items-center gap-2 sm:flex-nowrap">
-                                {isAdminOrPM && evCost > 0 && (
-                                  <span className="text-sm font-medium text-amber-600">{inr(evCost)}</span>
-                                )}
-                                <span className="flex w-[104px] shrink-0 justify-center">
-                                  <StatusBadge status={ev.status} />
-                                </span>
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  className="w-[92px] shrink-0"
-                                  onClick={() => setAssignDialogEvent(ev)}
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
+                                    assignedCount > 0
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : "bg-slate-100 text-slate-500"
+                                  }`}
                                 >
+                                  {assignedCount > 0 && "✓ "}
+                                  {assignedCount > 0 ? "Fully Assigned" : "Not Assigned"}
+                                </span>
+                                <Button size="sm" variant="secondary" className="rounded-full" onClick={() => setAssignDialogEvent(ev)}>
                                   Assign →
                                 </Button>
                               </div>
                             </div>
+
                             {assignedCount > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-1.5">
+                              <div className="mt-3 flex flex-wrap gap-2">
                                 {ev.team.map((m) => (
                                   <span
                                     key={m.uid}
-                                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
+                                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 py-1 pl-1 pr-3 text-xs text-slate-700"
                                   >
-                                    {m.name}
+                                    <span
+                                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${avatarColor(
+                                        m.name
+                                      )}`}
+                                    >
+                                      {initials(m.name)}
+                                    </span>
+                                    <span className="font-medium text-slate-800">{m.name}</span>
+                                    {m.costLabel && m.costLabel !== "Full Day" && (
+                                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                        {m.costLabel}
+                                      </span>
+                                    )}
                                     {editingCost?.eventId === ev.id && editingCost?.uid === m.uid ? (
-                                      <span className="inline-flex items-center gap-0.5 text-slate-500">
-                                        {m.costLabel || "Full Day"}{" "}
-                                        <input
-                                          autoFocus
-                                          type="number"
-                                          min="0"
-                                          value={editingCostValue}
-                                          onClick={(e) => e.preventDefault()}
-                                          onChange={(e) => setEditingCostValue(e.target.value)}
-                                          onKeyDown={(e) => {
-                                            if (e.key === "Enter") {
-                                              e.currentTarget.blur();
-                                            } else if (e.key === "Escape") {
-                                              setEditingCost(null);
-                                            }
-                                          }}
-                                          onBlur={() => {
+                                      <input
+                                        autoFocus
+                                        type="number"
+                                        min="0"
+                                        value={editingCostValue}
+                                        onClick={(e) => e.preventDefault()}
+                                        onChange={(e) => setEditingCostValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.currentTarget.blur();
+                                          } else if (e.key === "Escape") {
                                             setEditingCost(null);
-                                            if (editingCostValue !== String(m.cost || 0)) {
-                                              handleUpdateMemberCost(ev.id, m.uid, editingCostValue);
-                                            }
-                                          }}
-                                          disabled={savingCost}
-                                          className="w-16 border-b border-slate-400 bg-transparent text-[11px] text-slate-700 outline-none"
-                                        />
-                                      </span>
-                                    ) : (m.cost > 0 || isAdminOrPM) && (
-                                      <span
-                                        role={isAdminOrPM ? "button" : undefined}
-                                        tabIndex={isAdminOrPM ? 0 : undefined}
-                                        onClick={(e) => {
-                                          if (!isAdminOrPM) return;
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setEditingCostValue(String(m.cost || 0));
-                                          setEditingCost({ eventId: ev.id, uid: m.uid });
+                                          }
                                         }}
-                                        className={`text-slate-400 ${
-                                          isAdminOrPM ? "cursor-pointer underline decoration-dotted hover:text-slate-700" : ""
-                                        }`}
-                                        title={isAdminOrPM ? "Click to edit amount" : undefined}
-                                      >
-                                        {m.costLabel || "Full Day"} {inr(m.cost || 0)}
-                                      </span>
+                                        onBlur={() => {
+                                          setEditingCost(null);
+                                          if (editingCostValue !== String(m.cost || 0)) {
+                                            handleUpdateMemberCost(ev.id, m.uid, editingCostValue);
+                                          }
+                                        }}
+                                        disabled={savingCost}
+                                        className="w-16 border-b border-slate-400 bg-transparent text-xs text-slate-700 outline-none"
+                                      />
+                                    ) : (
+                                      (m.cost > 0 || isAdminOrPM) && (
+                                        <span
+                                          role={isAdminOrPM ? "button" : undefined}
+                                          tabIndex={isAdminOrPM ? 0 : undefined}
+                                          onClick={(e) => {
+                                            if (!isAdminOrPM) return;
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setEditingCostValue(String(m.cost || 0));
+                                            setEditingCost({ eventId: ev.id, uid: m.uid });
+                                          }}
+                                          className={`font-medium text-slate-500 ${
+                                            isAdminOrPM
+                                              ? "cursor-pointer underline decoration-dotted hover:text-slate-800"
+                                              : ""
+                                          }`}
+                                          title={isAdminOrPM ? "Click to edit amount" : undefined}
+                                        >
+                                          {inr(m.cost || 0)}
+                                        </span>
+                                      )
                                     )}
                                   </span>
                                 ))}
                               </div>
                             )}
+
+                            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
+                              <p className="text-sm text-slate-600">
+                                Team Cost <span className="font-semibold text-slate-900">{inr(evCost)}</span>
+                              </p>
+                              <div className="flex items-center gap-3">
+                                <span className="flex w-[100px] justify-center">
+                                  <StatusBadge status={ev.status} />
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setAssignDialogEvent(ev)}
+                                  className="text-sm font-medium text-slate-500 underline decoration-dotted hover:text-slate-900"
+                                >
+                                  Manage Team
+                                </button>
+                              </div>
+                            </div>
                           </CardContent>
                         </Card>
                       </li>
@@ -1335,73 +1463,11 @@ function ProjectDetailContent() {
               here — set those from Post-Production. */}
           <div>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-base font-medium text-slate-900 sm:text-lg">Deliverables</h3>
+              <h3 className="font-heading text-lg font-semibold text-slate-900">Deliverables</h3>
               <div className="flex flex-wrap items-center gap-2">
                 {isAdminOrPM && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Dialog open={manageDeliverableCategoriesOpen} onOpenChange={setManageDeliverableCategoriesOpen}>
-                    <DialogTrigger asChild>
-                      <Button size="sm" variant="outline">Manage Categories</Button>
-                    </DialogTrigger>
-                    <DialogContent className="w-[95vw] max-w-sm">
-                      <DialogHeader>
-                        <DialogTitle>Manage Deliverable Categories</DialogTitle>
-                      </DialogHeader>
-                      <form onSubmit={handleAddDeliverableCategory} className="flex items-center gap-2">
-                        <Input
-                          placeholder="New category name..."
-                          value={newDeliverableCategoryName}
-                          onChange={(e) => setNewDeliverableCategoryName(e.target.value)}
-                        />
-                        <Button type="submit" size="sm" disabled={savingDeliverableCategory || !newDeliverableCategoryName.trim()}>
-                          {savingDeliverableCategory ? "Adding..." : "Add"}
-                        </Button>
-                      </form>
-                      <div>
-                        <p className="mb-2 text-xs font-medium text-slate-500">Default (cannot remove)</p>
-                        <div className="flex flex-wrap gap-2">
-                          {DEFAULT_DELIVERABLE_CATEGORIES.map((c) => (
-                            <span
-                              key={c}
-                              className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryColor(c)}`}
-                            >
-                              {c}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      {deliverableCategories.length > DEFAULT_DELIVERABLE_CATEGORIES.length && (
-                        <div>
-                          <p className="mb-2 text-xs font-medium text-slate-500">Custom</p>
-                          <div className="flex flex-wrap gap-2">
-                            {deliverableCategories
-                              .filter((c) => !DEFAULT_DELIVERABLE_CATEGORIES.includes(c))
-                              .map((c) => (
-                                <span
-                                  key={c}
-                                  className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium ${categoryColor(c)}`}
-                                >
-                                  {c}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveDeliverableCategory(c)}
-                                    disabled={removingDeliverableCategory === c}
-                                    className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
-                                    title={`Remove ${c}`}
-                                  >
-                                    <X className="h-3 w-3" />
-                                  </button>
-                                </span>
-                              ))}
-                          </div>
-                        </div>
-                      )}
-                      <Button type="button" variant="outline" onClick={() => setManageDeliverableCategoriesOpen(false)}>
-                        Done
-                      </Button>
-                    </DialogContent>
-                  </Dialog>
-                  <Button size="sm" variant="secondary" onClick={() => setAddDeliverableOpen(true)}>
+                  <Button size="sm" variant="secondary" className="rounded-full" onClick={() => setAddDeliverableOpen(true)}>
                     <Plus className="h-4 w-4" /> Add Deliverable
                   </Button>
                 </div>
@@ -1423,157 +1489,148 @@ function ProjectDetailContent() {
             </p>
           </div>
 
-          {/* --- Hard Disks --- */}
-          <div className="mb-6">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-base font-medium text-slate-900 sm:text-lg">Client Hard Disks</h3>
-            </div>
-            {(project.hardDisks || []).length === 0 ? (
-              <p className="text-sm text-slate-500">No hard disks logged yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {(project.hardDisks || []).map((d) => (
-                  <Card key={d.id}>
-                    <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <HardDrive className="h-4 w-4 shrink-0 text-slate-400" />
+          {/* --- Hard Disks --- each entry can be tied to a specific event
+              (or left "Not event-specific") and carries a status from
+              HARD_DISK_STATUSES, editable inline via a Select. */}
+          <Card className="mb-6">
+            <CardContent className="p-4 sm:p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <HardDrive className="h-4 w-4 text-slate-400" />
+                <h3 className="font-heading text-lg font-semibold text-slate-900">Client Hard Disks</h3>
+              </div>
+              {(project.hardDisks || []).length === 0 ? (
+                <p className="text-sm text-slate-500">No hard disks logged yet.</p>
+              ) : (
+                <div className="mb-4 space-y-2">
+                  {(project.hardDisks || []).map((d) => {
+                    const linkedEvent = events.find((e) => e.id === d.eventId);
+                    return (
+                      <div
+                        key={d.id}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3"
+                      >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-slate-900">
                             {d.label || "Hard Disk"}
                           </p>
                           <p className="text-xs text-slate-500">
+                            {linkedEvent ? linkedEvent.eventName : "Not event-specific"}
+                            {" · "}
                             {d.capacityGB ? `${d.capacityGB} GB` : "Capacity not set"}
-                            {d.received && d.receivedAt ? ` · received ${formatDate(d.receivedAt)}` : ""}
                           </p>
                         </div>
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={d.status || (d.received ? "Received" : HARD_DISK_STATUSES[0])}
+                            onValueChange={(v) => handleUpdateHardDiskStatus(d.id, v)}
+                            disabled={updatingHddStatusId === d.id}
+                          >
+                            <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {HARD_DISK_STATUSES.map((s) => (
+                                <SelectItem key={s} value={s}>{s}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveHardDisk(d.id)}
+                            className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                            title="Remove"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleHardDiskReceived(d.id)}
-                          disabled={togglingHddId === d.id}
-                          title="Click to toggle"
-                          className={`inline-flex h-5 w-fit shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-colors ${
-                            d.received
-                              ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                              : "bg-stone-100 text-stone-500 hover:bg-stone-200"
-                          }`}
-                        >
-                          {d.received ? "Received" : "Pending"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveHardDisk(d.id)}
-                          className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                          title="Remove"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                    );
+                  })}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:items-end">
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Label</Label>
+                  <Input
+                    value={hddForm.label}
+                    onChange={(e) => setHddForm((prev) => ({ ...prev, label: e.target.value }))}
+                    placeholder="e.g. Photos Day 1"
+                    className="h-9 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Event</Label>
+                  <Select
+                    value={hddForm.eventId || "none"}
+                    onValueChange={(v) => setHddForm((prev) => ({ ...prev, eventId: v === "none" ? "" : v }))}
+                  >
+                    <SelectTrigger className="h-9 w-full text-sm">
+                      <SelectValue>
+                        {(v) => {
+                          if (!v || v === "none") return "Not event-specific";
+                          return events.find((ev) => ev.id === v)?.eventName || "Not event-specific";
+                        }}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent className="!w-[320px] max-w-[90vw]" align="start">
+                      <SelectItem value="none">Not event-specific</SelectItem>
+                      {events.map((ev) => (
+                        <SelectItem key={ev.id} value={ev.id} className="whitespace-normal">
+                          {ev.eventName}
+                          {ev.eventStartDate ? ` · ${formatDate(ev.eventStartDate)}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Capacity</Label>
+                  <div className="relative">
+                    <Input
+                      type="number"
+                      min="0"
+                      value={hddForm.capacityGB}
+                      onChange={(e) => setHddForm((prev) => ({ ...prev, capacityGB: e.target.value }))}
+                      placeholder="e.g. 1000"
+                      className="h-9 pr-10 text-sm"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                      GB
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Status</Label>
+                  <Select
+                    value={hddForm.status}
+                    onValueChange={(v) => setHddForm((prev) => ({ ...prev, status: v }))}
+                  >
+                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {HARD_DISK_STATUSES.map((s) => (
+                        <SelectItem key={s} value={s}>{s}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-            )}
-            <div className="mt-2 flex flex-wrap items-end gap-2">
-              <div>
-                <Label className="text-xs text-slate-500">Label</Label>
-                <Input
-                  value={hddForm.label}
-                  onChange={(e) => setHddForm((prev) => ({ ...prev, label: e.target.value }))}
-                  placeholder="e.g. Photos Day 1"
-                  className="h-8 w-40 text-sm"
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-slate-500">Capacity (GB)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={hddForm.capacityGB}
-                  onChange={(e) => setHddForm((prev) => ({ ...prev, capacityGB: e.target.value }))}
-                  placeholder="e.g. 1000"
-                  className="h-8 w-28 text-sm"
-                />
-              </div>
-              <Button size="sm" variant="secondary" onClick={handleAddHardDisk} disabled={savingHdd}>
+              <Button size="sm" className="mt-3 rounded-full" onClick={handleAddHardDisk} disabled={savingHdd}>
                 <Plus className="h-4 w-4" /> Add Hard Disk
               </Button>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
           {/* --- Other Expenses --- */}
           {isAdminOrPM && (
             <Card>
               <CardContent className="p-4 sm:p-5">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="font-medium text-slate-900">Other Expenses</h3>
+                  <div className="flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-slate-400" />
+                    <h3 className="font-heading text-lg font-semibold text-slate-900">Other Expenses</h3>
+                  </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Dialog open={manageCategoriesOpen} onOpenChange={setManageCategoriesOpen}>
-                      <DialogTrigger asChild>
-                        <Button size="sm" variant="outline">Manage Categories</Button>
-                      </DialogTrigger>
-                      <DialogContent className="w-[95vw] max-w-sm">
-                        <DialogHeader>
-                          <DialogTitle>Manage Expense Categories</DialogTitle>
-                        </DialogHeader>
-                        <form onSubmit={handleAddCategory} className="flex items-center gap-2">
-                          <Input
-                            placeholder="New category name..."
-                            value={newCategoryName}
-                            onChange={(e) => setNewCategoryName(e.target.value)}
-                          />
-                          <Button type="submit" size="sm" disabled={savingCategory || !newCategoryName.trim()}>
-                            {savingCategory ? "Adding..." : "Add"}
-                          </Button>
-                        </form>
-                        <div>
-                          <p className="mb-2 text-xs font-medium text-slate-500">Default (cannot remove)</p>
-                          <div className="flex flex-wrap gap-2">
-                            {MANUAL_EXPENSE_CATEGORIES.map((c) => (
-                              <span
-                                key={c}
-                                className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryColor(c)}`}
-                              >
-                                {c}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        {expenseCategories.length > MANUAL_EXPENSE_CATEGORIES.length && (
-                          <div>
-                            <p className="mb-2 text-xs font-medium text-slate-500">Custom</p>
-                            <div className="flex flex-wrap gap-2">
-                              {expenseCategories
-                                .filter((c) => !MANUAL_EXPENSE_CATEGORIES.includes(c))
-                                .map((c) => (
-                                  <span
-                                    key={c}
-                                    className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium ${categoryColor(c)}`}
-                                  >
-                                    {c}
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveCategory(c)}
-                                      disabled={removingCategory === c}
-                                      className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
-                                      title={`Remove ${c}`}
-                                    >
-                                      <X className="h-3 w-3" />
-                                    </button>
-                                  </span>
-                                ))}
-                            </div>
-                          </div>
-                        )}
-                        <Button type="button" variant="outline" onClick={() => setManageCategoriesOpen(false)}>
-                          Done
-                        </Button>
-                      </DialogContent>
-                    </Dialog>
                   <Dialog open={expenseDialogOpen} onOpenChange={setExpenseDialogOpen}>
                     <DialogTrigger asChild>
-                      <Button size="sm">
+                      <Button size="sm" className="rounded-full">
                         <Plus className="h-4 w-4" /> Add Expense
                       </Button>
                     </DialogTrigger>
@@ -1583,22 +1640,16 @@ function ProjectDetailContent() {
                       </DialogHeader>
                       <form onSubmit={handleCreateExpense} className="flex flex-col gap-4">
                         <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <Label htmlFor="expenseCategory">Category</Label>
-                            <Select
-                              value={expenseForm.category}
-                              onValueChange={(v) => setExpenseForm((p) => ({ ...p, category: v }))}
-                            >
-                              <SelectTrigger id="expenseCategory">{expenseForm.category}</SelectTrigger>
-                              <SelectContent>
-                                {expenseCategories.map((c) => (
-                                  <SelectItem key={c} value={c}>
-                                    {c}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
+                          <CategoryField
+                            id="expenseCategory"
+                            label="Category"
+                            value={expenseForm.category}
+                            onValueChange={(v) => setExpenseForm((p) => ({ ...p, category: v }))}
+                            categories={expenseCategories}
+                            builtIns={MANUAL_EXPENSE_CATEGORIES}
+                            onAdd={handleAddCategory}
+                            onRemove={handleRemoveCategory}
+                          />
                           <div>
                             <Label htmlFor="expenseDate">Date</Label>
                             <Input
@@ -1655,7 +1706,7 @@ function ProjectDetailContent() {
                             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${categoryColor(exp.category)}`}>
                               {exp.category}
                             </span>
-                            <span className="text-slate-500">{exp.date}</span>
+                            <span className="text-slate-500">{formatDateIST(exp.date)}</span>
                           </p>
                           {exp.description && (
                             <p className="text-xs text-slate-500">{exp.description}</p>
@@ -1711,17 +1762,16 @@ function ProjectDetailContent() {
                 placeholder="e.g. Teaser, Cinematic Trailer"
               />
             </div>
-            <div>
-              <Label htmlFor="newDeliverableCategory">Category</Label>
-              <Select value={newDeliverableCategory} onValueChange={setNewDeliverableCategory}>
-                <SelectTrigger id="newDeliverableCategory"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {deliverableCategories.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <CategoryField
+              id="newDeliverableCategory"
+              label="Category"
+              value={newDeliverableCategory}
+              onValueChange={setNewDeliverableCategory}
+              categories={deliverableCategories}
+              builtIns={DEFAULT_DELIVERABLE_CATEGORIES}
+              onAdd={handleAddDeliverableCategory}
+              onRemove={handleRemoveDeliverableCategory}
+            />
             <Button type="submit" disabled={savingDeliverable}>
               {savingDeliverable ? "Adding..." : "Add"}
             </Button>

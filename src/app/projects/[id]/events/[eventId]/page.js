@@ -17,6 +17,7 @@ import {
 } from "@/lib/firebase/events";
 import { getProjectById } from "@/lib/firebase/projects";
 import { getAllEmployees } from "@/lib/firebase/employees";
+import SearchableSelect from "@/components/ui/searchable-select";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
 import { notifyEmployee } from "@/lib/firebase/notifications";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
@@ -47,8 +48,47 @@ import StatusBadge from "@/components/ui/status-badge";
 import AvatarInitials from "@/components/ui/avatar-initials";
 import { toast } from "sonner";
 import { ArrowLeft, AlertTriangle, X, Trash2, Users2, CalendarDays, MessageSquare, Banknote } from "lucide-react";
+import { formatDateTime12 } from "@/lib/dateIST";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
+
+/**
+ * Flat option list for the "Employee or Freelancer" picker, split into
+ * Employees / Freelancers headings with role or skill on the hint line, so
+ * searching "editor" or "video" works when the name escapes you.
+ *
+ * People already on this event stay listed but greyed out and tagged
+ * "Added" — you used to be able to pick one and only find out on clicking
+ * Add, via an error toast. Anyone double-booked on an overlapping event
+ * gets a "Conflict" tag up front rather than after selecting.
+ *
+ * Kept identical in shape to the one in AssignTeamDialog so the two
+ * assignment surfaces behave the same way.
+ */
+function buildAssigneeOptions(employees, freelancers, assignedUids, conflictMap) {
+  const badgeFor = (id) => {
+    if (assignedUids.has(id)) return "Added";
+    return conflictMap[id]?.length ? "Conflict" : undefined;
+  };
+  return [
+    ...employees.map((e) => ({
+      value: `employee:${e.uid}`,
+      label: e.name,
+      hint: e.role,
+      group: "Employees",
+      disabled: assignedUids.has(e.uid),
+      badge: badgeFor(e.uid),
+    })),
+    ...freelancers.map((fl) => ({
+      value: `freelancer:${fl.id}`,
+      label: fl.name,
+      hint: `${fl.skill} · freelancer`,
+      group: "Freelancers",
+      disabled: assignedUids.has(fl.id),
+      badge: badgeFor(fl.id),
+    })),
+  ];
+}
 
 function EventDetailContent() {
   const { id: projectId, eventId } = useParams();
@@ -382,6 +422,9 @@ function EventDetailContent() {
   const selectedConflicts = selectedId ? conflictMap[selectedId] : null;
   const selectedEmployee = employees.find((e) => e.uid === selectedId);
   const selectedFreelancer = freelancers.find((f) => f.id === selectedId);
+  const assignedUidSet = new Set((event?.team || []).map((m) => m.uid));
+  const assigneeOptions = buildAssigneeOptions(employees, freelancers, assignedUidSet, conflictMap);
+
   const selectedLabel = selectedEmployee
     ? `${selectedEmployee.name} (${selectedEmployee.role})`
     : selectedFreelancer
@@ -546,37 +589,20 @@ function EventDetailContent() {
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="flex-1">
                 <Label>Employee or Freelancer</Label>
-                <Select value={selectedKey} onValueChange={setSelectedKey}>
-                  <SelectTrigger className="w-full">
-                    {selectedLabel || <span className="text-muted-foreground">Select employee or freelancer</span>}
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.length > 0 && (
-                      <>
-                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Employees
-                        </p>
-                        {employees.map((e) => (
-                          <SelectItem key={`employee:${e.uid}`} value={`employee:${e.uid}`}>
-                            {e.name} ({e.role})
-                          </SelectItem>
-                        ))}
-                      </>
-                    )}
-                    {freelancers.length > 0 && (
-                      <>
-                        <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Freelancers
-                        </p>
-                        {freelancers.map((f) => (
-                          <SelectItem key={`freelancer:${f.id}`} value={`freelancer:${f.id}`}>
-                            {f.name} ({f.skill})
-                          </SelectItem>
-                        ))}
-                      </>
-                    )}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  value={selectedKey}
+                  onValueChange={setSelectedKey}
+                  options={assigneeOptions}
+                  placeholder="Select employee or freelancer"
+                  searchPlaceholder="Search by name, role or skill..."
+                  emptyText="Nobody matches that"
+                  alwaysSearch
+                  renderValue={() =>
+                    selectedLabel || (
+                      <span className="text-muted-foreground">Select employee or freelancer</span>
+                    )
+                  }
+                />
               </div>
               <Button onClick={handleAddMember} disabled={savingTeam || !selectedKey} className="w-full sm:w-auto">
                 Add
@@ -785,7 +811,7 @@ function EventDetailContent() {
                           <span className="font-medium text-foreground">{u.name}</span>
                           {latest?.updatedAt && (
                             <span className="text-xs text-muted-foreground">
-                              {new Date(latest.updatedAt).toLocaleString()}
+                              {formatDateTime12(latest.updatedAt)}
                             </span>
                           )}
                         </div>

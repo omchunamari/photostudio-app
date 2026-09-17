@@ -13,6 +13,7 @@ import { getAllExpenses, sumExpensesByProject } from "@/lib/firebase/expenses";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { ROLES } from "@/lib/constants/roles";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
+import { PROJECT_TYPES } from "@/lib/constants/leads";
 import { isProjectPast } from "@/lib/status";
 import { fyStartYearForDate, fyLabel, inFY, formatINR } from "@/lib/dashboardFinance";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,7 +42,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import SearchableSelect from "@/components/ui/searchable-select";
 import StatusBadge from "@/components/ui/status-badge";
+import { formatDateIST } from "@/lib/dateIST";
 import { toast } from "sonner";
 import { Download, Plus, Search, HardDrive, List, LayoutGrid } from "lucide-react";
 
@@ -65,13 +68,10 @@ function monthLabel(key) {
   return `${MONTH_LABELS[Number(month) - 1]} ${year}`;
 }
 function formatDate(dateStr) {
-  if (!dateStr) return "—";
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return formatDateIST(dateStr);
 }
 
-const emptyForm = { projectName: "", clientName: "", quotationAmount: "", eventDate: "", leaderUid: "" };
+const emptyForm = { projectName: "", clientName: "", eventType: "", quotationAmount: "", eventDate: "", leaderUid: "" };
 
 function ProjectsContent() {
   const { user } = useAuth();
@@ -94,6 +94,7 @@ function ProjectsContent() {
   const [view, setView] = useState("list"); // "list" | "grid"
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [eventTypeFilter, setEventTypeFilter] = useState("all");
   const [leaderFilter, setLeaderFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("all");
   const currentFYStart = fyStartYearForDate(new Date());
@@ -187,6 +188,7 @@ function ProjectsContent() {
     return rows
       .filter((r) => (tab === "done" ? isProjectPast(r) : !isProjectPast(r)))
       .filter((r) => statusFilter === "all" || r.status === statusFilter)
+      .filter((r) => eventTypeFilter === "all" || r.eventType === eventTypeFilter)
       .filter((r) => leaderFilter === "all" || r.leaderUid === leaderFilter)
       .filter((r) => monthFilter === "all" || r.bookedMonthKey === monthFilter)
       .filter((r) => fyStart === "all" || inFY(r.createdAt, Number(fyStart)))
@@ -196,16 +198,18 @@ function ProjectsContent() {
         return (
           r.projectName?.toLowerCase().includes(term) ||
           r.clientName?.toLowerCase().includes(term) ||
+          r.leadName?.toLowerCase().includes(term) ||
+          r.eventType?.toLowerCase().includes(term) ||
           r.quoteNumber?.toLowerCase().includes(term)
         );
       })
       .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-  }, [rows, tab, statusFilter, leaderFilter, monthFilter, fyStart, search]);
+  }, [rows, tab, statusFilter, eventTypeFilter, leaderFilter, monthFilter, fyStart, search]);
 
   function handleExport() {
-    const header = ["Project", "Client", "Booked", "Handled By", "Package", "Received", "Balance", "Net Profit", "Status"];
+    const header = ["Project", "Client", "Event Type", "Handled By", "Package", "Received", "Balance", "Net Profit", "Status"];
     const exportRows = filteredRows.map((r) => [
-      r.projectName, r.clientName, (r.createdAt || "").slice(0, 10), r.leaderName || "",
+      r.projectName, r.clientName, r.eventType || "", r.leaderName || "",
       r.packageAmount, r.received, r.balance, r.netProfit, r.status,
     ]);
     const csv = [header, ...exportRows]
@@ -258,13 +262,15 @@ function ProjectsContent() {
         {
           projectName: form.projectName.trim(),
           clientName: form.clientName.trim(),
+          eventType: form.eventType || null,
           leadId: null,
           quotationAmount: Number(form.quotationAmount) || 0,
           eventDate: form.eventDate || null,
           leaderUid: form.leaderUid || null,
           leaderName: leader?.name || null,
         },
-        user.uid
+        user.uid,
+        user.name
       );
       toast.success("Project created");
       setDialogOpen(false);
@@ -295,7 +301,7 @@ function ProjectsContent() {
             </div>
             <StatusBadge status={r.status} />
           </div>
-          <p className="text-xs text-muted-foreground">Booked: {formatDate(r.createdAt)}</p>
+          <p className="text-xs text-muted-foreground">{r.eventType || "No event type set"}</p>
           {r.leaderName ? (
             <span className="inline-flex h-5 w-fit shrink-0 items-center rounded-full bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-700">
               {r.leaderName}
@@ -379,7 +385,7 @@ function ProjectsContent() {
                   <Plus className="h-3.5 w-3.5" /> New Project
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-h-[85vh] w-[95vw] max-w-md overflow-y-auto sm:w-full">
+              <DialogContent className="max-h-[88vh] w-[95vw] overflow-y-auto sm:w-full sm:max-w-2xl">
                 <DialogHeader>
                   <DialogTitle>New Project</DialogTitle>
                 </DialogHeader>
@@ -399,16 +405,28 @@ function ProjectsContent() {
                       autoFocus
                     />
                   </div>
-                  <div>
-                    <Label htmlFor="clientName">Client Name *</Label>
-                    <Input
-                      id="clientName"
-                      value={form.clientName}
-                      onChange={(e) => updateForm("clientName", e.target.value)}
-                      required
-                    />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label htmlFor="clientName">Client Name *</Label>
+                      <Input
+                        id="clientName"
+                        value={form.clientName}
+                        onChange={(e) => updateForm("clientName", e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label>Event Type</Label>
+                      <SearchableSelect
+                        value={form.eventType}
+                        onValueChange={(v) => updateForm("eventType", v)}
+                        options={PROJECT_TYPES}
+                        placeholder="Select..."
+                        searchPlaceholder="Search event types..."
+                      />
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <div>
                       <Label htmlFor="quotationAmount">Package Amount (₹)</Label>
                       <Input
@@ -432,18 +450,14 @@ function ProjectsContent() {
                   </div>
                   <div>
                     <Label>Project Leader</Label>
-                    <Select value={form.leaderUid} onValueChange={(v) => updateForm("leaderUid", v)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Assign later...">
-                          {(v) => employees.find((e) => e.uid === v)?.name || "Assign later..."}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {employees.map((e) => (
-                          <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect
+                      value={form.leaderUid}
+                      onValueChange={(v) => updateForm("leaderUid", v)}
+                      options={employees.map((e) => ({ value: e.uid, label: e.name, hint: e.role }))}
+                      placeholder="Assign later..."
+                      searchPlaceholder="Search staff..."
+                      alwaysSearch
+                    />
                   </div>
                   <div className="flex justify-end gap-2">
                     <Button type="button" variant="secondary" onClick={() => setDialogOpen(false)}>
@@ -487,42 +501,42 @@ function ProjectsContent() {
             className="pl-8"
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-full sm:w-[160px]">
-            <SelectValue>{(v) => (v === "all" ? "All statuses" : v)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {PROJECT_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>{s}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={monthFilter} onValueChange={setMonthFilter}>
-          <SelectTrigger className="w-full sm:w-[150px]">
-            <SelectValue>{(v) => (v === "all" ? "All months" : monthLabel(v))}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All months</SelectItem>
-            {monthOptions.map((k) => (
-              <SelectItem key={k} value={k}>{monthLabel(k)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          value={statusFilter}
+          onValueChange={setStatusFilter}
+          options={[{ value: "all", label: "All statuses" }, ...PROJECT_STATUSES]}
+          className="w-full sm:w-[160px]"
+          searchPlaceholder="Search statuses..."
+        />
+        <SearchableSelect
+          value={eventTypeFilter}
+          onValueChange={setEventTypeFilter}
+          options={[{ value: "all", label: "All event types" }, ...PROJECT_TYPES]}
+          className="w-full sm:w-[160px]"
+          searchPlaceholder="Search event types..."
+        />
+        <SearchableSelect
+          value={monthFilter}
+          onValueChange={setMonthFilter}
+          options={[
+            { value: "all", label: "All months" },
+            ...monthOptions.map((k) => ({ value: k, label: monthLabel(k) })),
+          ]}
+          className="w-full sm:w-[150px]"
+          searchPlaceholder="Search months..."
+        />
         {isAdminOrPM && (
-          <Select value={leaderFilter} onValueChange={setLeaderFilter}>
-            <SelectTrigger className="w-full sm:w-[170px]">
-              <SelectValue>
-                {(v) => (v === "all" ? "All project leaders" : projectLeaders.find((e) => e.uid === v)?.name || "All project leaders")}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All project leaders</SelectItem>
-              {projectLeaders.map((e) => (
-                <SelectItem key={e.uid} value={e.uid}>{e.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchableSelect
+            value={leaderFilter}
+            onValueChange={setLeaderFilter}
+            options={[
+              { value: "all", label: "All project leaders" },
+              ...projectLeaders.map((e) => ({ value: e.uid, label: e.name })),
+            ]}
+            className="w-full sm:w-[180px]"
+            searchPlaceholder="Search project leaders..."
+            alwaysSearch
+          />
         )}
       </div>
 
@@ -554,7 +568,7 @@ function ProjectsContent() {
             <TableHeader>
               <TableRow>
                 <TableHead>Project</TableHead>
-                <TableHead>Booked</TableHead>
+                <TableHead>Event Type</TableHead>
                 <TableHead>Handled By</TableHead>
                 {canSeeFinance && (
                   <>
@@ -575,7 +589,7 @@ function ProjectsContent() {
                     <span className="font-medium text-foreground">{r.projectName}</span>
                     <p className="text-xs text-muted-foreground">{r.quoteNumber || r.clientName}</p>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(r.createdAt)}</TableCell>
+                  <TableCell className="text-muted-foreground">{r.eventType || "—"}</TableCell>
                   <TableCell>
                     {r.leaderName ? (
                       <span className="inline-flex h-5 w-fit shrink-0 items-center rounded-full bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-700">

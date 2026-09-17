@@ -9,11 +9,14 @@ import AppShell from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  getNotificationsForUser,
+  subscribeToNotifications,
   markNotificationRead,
   markAllRead,
+  deleteNotification,
+  clearAllNotifications,
 } from "@/lib/firebase/notifications";
 import { toast } from "sonner";
+import { X, Trash2 } from "lucide-react";
 
 function timeAgo(iso) {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -33,16 +36,19 @@ function NotificationsContent() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    const list = await getNotificationsForUser(user.uid);
-    setNotifications(list);
-    setLoading(false);
-  }
+  const [clearing, setClearing] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
-    load();
+    // Live, not a one-shot fetch: updates the instant a notification is
+    // created, read, or deleted — from this tab, another tab, or anything
+    // else in the app that fires one — so nothing here ever needs a
+    // manual refetch or a page reload to catch up.
+    const unsubscribe = subscribeToNotifications(user.uid, (list) => {
+      setNotifications(list);
+      setLoading(false);
+    });
+    return unsubscribe;
   }, [user.uid]);
 
   async function handleMarkAllRead() {
@@ -50,11 +56,35 @@ function NotificationsContent() {
     try {
       await markAllRead(user.uid);
       toast.success("All notifications marked as read");
-      load();
     } catch (err) {
       toast.error(err.message);
     } finally {
       setMarking(false);
+    }
+  }
+
+  async function handleClearAll() {
+    if (!confirm("Clear all notifications? This can't be undone.")) return;
+    setClearing(true);
+    try {
+      await clearAllNotifications(user.uid);
+      toast.success("Notifications cleared");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  async function handleDeleteOne(e, id) {
+    e.stopPropagation();
+    setDeletingId(id);
+    try {
+      await deleteNotification(id);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -68,9 +98,6 @@ function NotificationsContent() {
     }
     if (!n.read) {
       markNotificationRead(n.id).catch(() => {});
-      setNotifications((prev) =>
-        prev.map((item) => (item.id === n.id ? { ...item, read: true } : item))
-      );
     }
   }
 
@@ -78,13 +105,26 @@ function NotificationsContent() {
 
   return (
     <AppShell>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xl font-semibold text-slate-900 sm:text-2xl">Notifications</h2>
-        {hasUnread && (
-          <Button variant="outline" size="sm" onClick={handleMarkAllRead} disabled={marking}>
-            {marking ? "Marking..." : "Mark all read"}
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {hasUnread && (
+            <Button variant="outline" size="sm" onClick={handleMarkAllRead} disabled={marking}>
+              {marking ? "Marking..." : "Mark all read"}
+            </Button>
+          )}
+          {notifications.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearAll}
+              disabled={clearing}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> {clearing ? "Clearing..." : "Clear all"}
+            </Button>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -108,7 +148,18 @@ function NotificationsContent() {
                   </p>
                   <p className="mt-0.5 text-sm text-slate-500">{n.message}</p>
                 </div>
-                <span className="shrink-0 text-xs text-slate-400">{timeAgo(n.createdAt)}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs text-slate-400">{timeAgo(n.createdAt)}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDeleteOne(e, n.id)}
+                    disabled={deletingId === n.id}
+                    title="Remove this notification"
+                    className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-destructive disabled:opacity-50"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </CardContent>
             </Card>
           ))}

@@ -18,7 +18,8 @@ import { db } from "./client";
  *   projectId: string,
  *   projectName: string,   // denormalized, for list/table display
  *   invoiceNumber: string, // e.g. "INV-0001"
- *   date: string,          // ISO date, when the invoice was raised
+ *   date: string,          // ISO date, when the invoice was RAISED
+ *   paidAt: string | null, // ISO date, when the money actually LANDED
  *   amount: number,
  *   status: "unpaid" | "paid",
  *   note: string,
@@ -51,6 +52,9 @@ export async function createInvoice(data, createdByUid, createdByName) {
     projectName: data.projectName || "",
     invoiceNumber: data.invoiceNumber,
     date: data.date || now.slice(0, 10),
+    // An invoice created already marked paid is assumed collected on its own
+    // date unless the user says otherwise; unpaid invoices carry no paidAt.
+    paidAt: (data.status || "unpaid") === "paid" ? data.paidAt || data.date || now.slice(0, 10) : null,
     amount: Number(data.amount) || 0,
     status: data.status || "unpaid",
     note: data.note || "",
@@ -66,6 +70,7 @@ export async function updateInvoice(id, data) {
   await updateDoc(doc(db, "invoices", id), {
     invoiceNumber: data.invoiceNumber,
     date: data.date,
+    paidAt: data.status === "paid" ? data.paidAt || data.date || todayISO() : null,
     amount: Number(data.amount) || 0,
     status: data.status,
     note: data.note || "",
@@ -73,11 +78,21 @@ export async function updateInvoice(id, data) {
   });
 }
 
-export async function setInvoiceStatus(id, status) {
+/**
+ * Flips paid/unpaid AND stamps when it happened. Marking paid records
+ * today's date as the collection date; reverting to unpaid clears it, so a
+ * mis-click can't leave a stale payment date behind inflating cash-flow.
+ */
+export async function setInvoiceStatus(id, status, paidAt) {
   await updateDoc(doc(db, "invoices", id), {
     status,
+    paidAt: status === "paid" ? paidAt || todayISO() : null,
     updatedAt: new Date().toISOString(),
   });
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export async function deleteInvoice(id) {
@@ -105,4 +120,13 @@ export function sumReceived(invoices) {
   return invoices
     .filter((inv) => inv.status === "paid")
     .reduce((sum, inv) => sum + (inv.amount || 0), 0);
+}
+
+/**
+ * The date a paid invoice should be counted against for cash-flow purposes.
+ * Falls back to the raised date for invoices created before paidAt existed,
+ * so historical data still lands in a sensible month instead of vanishing.
+ */
+export function collectionDate(inv) {
+  return inv?.paidAt || inv?.date || null;
 }

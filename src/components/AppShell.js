@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import AvatarInitials from "@/components/ui/avatar-initials";
 import { Button } from "@/components/ui/button";
+import NotificationBell from "@/components/NotificationBell";
 import {
   LayoutDashboard,
   Users,
@@ -31,6 +32,8 @@ import {
 // intentionally left out of navigation for the first client release.
 // Freelancers, Projects (incl. Project Leader assignment), and Leads
 // (incl. Quotations) are the modules of the ongoing revamp turned back on.
+// Notifications is reachable via the bell (top-right) and its "View all
+// notifications" link — no separate sidebar entry needed.
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: null },
   { label: "Leads", href: "/leads", icon: Target, roles: ["super_admin", "admin", "project_manager"] },
@@ -74,7 +77,7 @@ export default function AppShell({ children }) {
           </div>
           <h1 className="font-heading text-sm font-semibold text-sidebar-foreground">The Rolling Stories</h1>
         </div>
-        <div className="w-8" />
+        <NotificationBell uid={user?.uid} />
       </div>
 
       {/* Mobile overlay */}
@@ -144,7 +147,18 @@ export default function AppShell({ children }) {
         </div>
       </aside>
 
-      <main className="flex-1 p-4 pt-20 md:p-6 md:pt-6">{children}</main>
+      {/* Desktop bell lives in its own slim strip above page content, not
+          floating over it — several pages already have their own controls
+          (Export CSV, FY selector, etc.) sitting in that exact corner, so a
+          fixed-position bell would sit on top of them. This pushes content
+          down by a small, consistent amount instead. Mobile doesn't need
+          this: its top bar above already has the one bell, top-right. */}
+      <div className="flex flex-1 flex-col">
+        <div className="hidden shrink-0 items-center justify-end border-b border-border bg-background px-6 py-2 md:flex">
+          <NotificationBell uid={user?.uid} />
+        </div>
+        <main className="flex-1 p-4 pt-20 md:p-6 md:pt-6">{children}</main>
+      </div>
     </div>
   );
 }

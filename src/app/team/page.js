@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Users2, User, MessageSquarePlus, Pencil, Trash2, Check, X } from "lucide-react";
+import { formatDateIST } from "@/lib/dateIST";
 
 function TeamNoteList({ notes, onEdit, onDelete, editingId, editText, setEditText, onSaveEdit, onCancelEdit, savingEdit }) {
   if (!notes.length) return null;
@@ -71,7 +72,7 @@ function TeamNoteList({ notes, onEdit, onDelete, editingId, editText, setEditTex
                 <div className="min-w-0 flex-1">
                   <span>{note.text}</span>
                   <span className="ml-1 text-violet-400">
-                    — {note.addedBy || "admin"}, {new Date(note.addedAt).toLocaleDateString()}
+                    — {note.addedBy || "admin"}, {formatDateIST(note.addedAt)}
                     {note.editedAt ? " (edited)" : ""}
                   </span>
                 </div>

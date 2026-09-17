@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import StatusBadge from "@/components/ui/status-badge";
 import { toast } from "sonner";
 import { ArrowLeft, ClipboardList, History, Users2 } from "lucide-react";
+import { formatDateTime12 } from "@/lib/dateIST";
 
 const HIDDEN_ROLES = ["super_admin", "admin"];
 
@@ -168,7 +169,7 @@ function MyEventDetailContent() {
                       <p className="text-sm text-slate-700">{n.text}</p>
                       <p className="mt-1 text-[11px] text-slate-400">
                         {n.addedBy ? `${n.addedBy} · ` : ""}
-                        {new Date(n.addedAt).toLocaleString()}
+                        {formatDateTime12(n.addedAt)}
                       </p>
                     </div>
                   ))}
@@ -192,7 +193,7 @@ function MyEventDetailContent() {
                       <p className="text-sm text-slate-700">{a.text}</p>
                       <p className="mt-1 text-[11px] text-slate-400">
                         {a.addedBy ? `${a.addedBy} · ` : ""}
-                        {new Date(a.addedAt).toLocaleString()}
+                        {formatDateTime12(a.addedAt)}
                       </p>
                     </div>
                   ))}
@@ -238,7 +239,7 @@ function MyEventDetailContent() {
                     <div key={idx} className="border-l-2 border-slate-200 pl-3">
                       <p className="text-sm text-slate-700">{u.text}</p>
                       <p className="mt-0.5 text-[11px] text-slate-400">
-                        {new Date(u.updatedAt).toLocaleString()}
+                        {formatDateTime12(u.updatedAt)}
                       </p>
                     </div>
                   ))}
