@@ -50,6 +50,8 @@ import {
   addCustomExpenseCategory,
   removeCustomExpenseCategory,
 } from "@/lib/firebase/expenses";
+import { getTransactionsForProject } from "@/lib/firebase/finance";
+import { plExpense, plIncome } from "@/lib/finance/calc";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
 import { PROJECT_TYPES } from "@/lib/constants/leads";
 import { isEventPast } from "@/lib/status";
@@ -269,6 +271,9 @@ function ProjectDetailContent() {
   const [employees, setEmployees] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  // Finance-module ledger rows for this project (income / expenses entered in
+  // Finance). Only loaded for roles the ledger rules allow.
+  const [ledgerTxs, setLedgerTxs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -371,6 +376,13 @@ function ProjectDetailContent() {
           setExpenseCategories(cats);
         } catch (err) {
           toast.error(`Failed loading financials: ${err.message}`);
+        }
+        if (["super_admin", "admin"].includes(user.role)) {
+          try {
+            setLedgerTxs(await getTransactionsForProject(id));
+          } catch (err) {
+            console.error("Finance ledger unavailable:", err);
+          }
         }
       }
     }
@@ -804,13 +816,17 @@ function ProjectDetailContent() {
 
   // --- Financial rollups ---
   const packageAmount = Number(project.quotationAmount) || 0;
-  const received = sumReceived(invoices);
+  // Received / expenses = the project's own invoices & expenses PLUS anything
+  // entered once in the Finance module — same numbers Finance reports show.
+  const ledgerReceived = ledgerTxs.reduce((sum, t) => sum + plIncome(t), 0);
+  const ledgerExpenses = ledgerTxs.reduce((sum, t) => sum + plExpense(t), 0);
+  const received = sumReceived(invoices) + ledgerReceived;
   const balanceDue = Math.max(packageAmount - received, 0);
   const receivedPct = packageAmount > 0 ? Math.round((received / packageAmount) * 100) : 0;
   const balancePct = packageAmount > 0 ? Math.round((balanceDue / packageAmount) * 100) : 0;
   const teamCost = events.reduce((sum, ev) => sum + sumEventTeamCost(ev.team), 0);
   const teamCostPct = packageAmount > 0 ? Math.round((teamCost / packageAmount) * 100) : 0;
-  const otherExpensesTotal = expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+  const otherExpensesTotal = expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0) + ledgerExpenses;
   const otherExpensesPct = packageAmount > 0 ? Math.round((otherExpensesTotal / packageAmount) * 100) : 0;
   const netProfit = packageAmount - teamCost - otherExpensesTotal;
   const marginPct = packageAmount > 0 ? Math.round((netProfit / packageAmount) * 100) : 0;
@@ -959,6 +975,13 @@ function ProjectDetailContent() {
           Package / Team Cost / Other Expenses row underneath. --- */}
       {isAdminOrPM && (
         <div className="mb-6 flex flex-col gap-3">
+          {["super_admin", "admin"].includes(user.role) && (
+            <div className="flex justify-end text-xs">
+              <Link href="/finance/transactions" className="font-medium text-emerald-700 hover:underline">
+                Add income / expense for this project in Finance →
+              </Link>
+            </div>
+          )}
           <Card>
             <CardContent className="flex flex-col gap-6 p-5 sm:flex-row sm:items-center sm:justify-between">
               <div>

@@ -25,6 +25,8 @@ import {
   Menu,
   X,
   Settings,
+  Wallet,
+  FileText,
 } from "lucide-react";
 
 // v1 scope: only these modules are active. Other pages/files (teams,
@@ -48,6 +50,9 @@ const NAV_ITEMS = [
   { label: "Attendance", href: "/attendance", icon: Clock, roles: ["super_admin", "admin", "hr"] },
   { label: "Employees", href: "/employees", icon: Users, roles: ["super_admin", "admin", "hr"] },
   { label: "Freelancers", href: "/freelancers", icon: UserRound, roles: ["super_admin", "admin", "project_manager"] },
+  { label: "Finance", href: "/finance", icon: Wallet, roles: ["super_admin", "admin", "accountant"] },
+  // Every employee can download their own payslips once salary is paid.
+  { label: "Payslips", href: "/payslips", icon: FileText, roles: null },
   { label: "Analytics", href: "/analytics", icon: BarChart3, roles: ["super_admin", "admin", "project_manager"] },
   { label: "Devices", href: "/devices", icon: Monitor, roles: ["super_admin", "admin"] },
   { label: "Settings", href: "/settings", icon: Settings, roles: ["super_admin", "admin", "project_manager"] },

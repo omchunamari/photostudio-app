@@ -24,6 +24,11 @@ service cloud.firestore {
       return myRole() in ['super_admin', 'admin', 'hr'];
     }
 
+    // Finance module (ledger, payroll, loans). super_admin/admin/accountant.
+    function isFinance() {
+      return myRole() in ['super_admin', 'admin', 'accountant'];
+    }
+
     function isProjectOps() {
       return myRole() in ['super_admin', 'admin', 'project_manager'];
     }
@@ -88,8 +93,8 @@ service cloud.firestore {
 
     // --- attendance --- (doc id pattern: {employeeUid}_{date})
     match /attendance/{docId} {
-      allow get: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
-      allow list: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow get: if isHR() || isFinance() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      allow list: if isHR() || isFinance() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
       allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid && docId.split('_')[0] == request.auth.uid;
       allow update: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
       allow delete: if isAdmin();
@@ -97,7 +102,7 @@ service cloud.firestore {
 
     // --- leaveRequests --- (random auto-ids)
     match /leaveRequests/{docId} {
-      allow read: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow read: if isHR() || isFinance() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
       allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid;
       allow update: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
       allow delete: if isAdmin();
@@ -185,7 +190,7 @@ service cloud.firestore {
     match /orgSettings/{docId} {
       allow get: if true;
       allow list: if isSignedIn();
-      allow write: if isProjectOps();
+      allow write: if isProjectOps() || isFinance();
     }
 
     // --- invoices --- (financial data — admin/PM only)
@@ -198,6 +203,39 @@ service cloud.firestore {
     match /expenses/{expenseId} {
       allow read: if isProjectOps();
       allow create, update, delete: if isProjectOps();
+    }
+
+    // --- Finance module --- (admin / super_admin / accountant only)
+    match /financeAccounts/{docId} {
+      allow read, write: if isFinance();
+    }
+
+    match /financeTransactions/{docId} {
+      allow read, write: if isFinance();
+    }
+
+    match /allowances/{docId} {
+      allow read, write: if isFinance();
+    }
+
+    match /loans/{docId} {
+      allow read, write: if isFinance();
+    }
+
+    // Salary structure / increments / staff advances — never employee-writable.
+    match /employeeFinance/{docId} {
+      allow read, write: if isFinance();
+    }
+
+    match /employeeAdvances/{docId} {
+      allow read, write: if isFinance();
+    }
+
+    // Salary runs + payslips: finance manages them; an employee may read only
+    // their own (payslip download).
+    match /payrolls/{docId} {
+      allow read: if isFinance() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow write: if isFinance();
     }
 
     // --- postProdTasks ---
