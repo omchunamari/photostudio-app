@@ -46,20 +46,34 @@ export default function useFinanceData() {
 
   const reload = useCallback(async () => {
     try {
+      // Load each source independently so one denied/missing collection
+      // doesn't blank the whole module, and the toast names what failed.
+      const failed = [];
+      const safe = (name, promise, fallback) =>
+        promise.catch((err) => {
+          console.error(`Finance load failed: ${name}`, err);
+          failed.push(name);
+          return fallback;
+        });
       const [accounts, rows, projects, employees, freelancers, allowances, loans, payrolls, employeeFinance, advances, cats] =
         await Promise.all([
-          ensureDefaultAccounts(),
-          getAllFinanceRows(),
-          getAllProjects(),
-          getAllEmployees(),
-          getAllFreelancers(),
-          getAllowances(),
-          getLoans(),
-          getAllPayrolls(),
-          getAllEmployeeFinance(),
-          getEmployeeAdvances(),
-          getFinanceCategories(),
+          safe("accounts", ensureDefaultAccounts(), []),
+          safe("transactions", getAllFinanceRows(), { ledger: [], all: [] }),
+          safe("projects", getAllProjects(), []),
+          safe("employees", getAllEmployees(), []),
+          safe("freelancers", getAllFreelancers(), []),
+          safe("allowances", getAllowances(), []),
+          safe("loans", getLoans(), []),
+          safe("payrolls", getAllPayrolls(), []),
+          safe("employee salaries", getAllEmployeeFinance(), {}),
+          safe("employee advances", getEmployeeAdvances(), []),
+          safe("categories", getFinanceCategories(), {
+            project: DEFAULT_PROJECT_EXPENSE_CATEGORIES,
+            company: DEFAULT_COMPANY_EXPENSE_CATEGORIES,
+            income: DEFAULT_INCOME_CATEGORIES,
+          }),
         ]);
+      if (failed.length) toast.error(`Permission denied loading: ${failed.join(", ")}. Check Firestore rules are published.`);
       setState({
         loading: false,
         accounts,

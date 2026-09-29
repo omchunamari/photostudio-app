@@ -195,13 +195,13 @@ service cloud.firestore {
 
     // --- invoices --- (financial data — admin/PM only)
     match /invoices/{invoiceId} {
-      allow read: if isProjectOps();
+      allow read: if isProjectOps() || isFinance();
       allow create, update, delete: if isProjectOps();
     }
 
     // --- expenses --- (financial data — admin/PM only)
     match /expenses/{expenseId} {
-      allow read: if isProjectOps();
+      allow read: if isProjectOps() || isFinance();
       allow create, update, delete: if isProjectOps();
     }
 
