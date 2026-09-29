@@ -24,16 +24,6 @@ service cloud.firestore {
       return myRole() in ['super_admin', 'admin', 'hr'];
     }
 
-    // Attendance is the one HR-adjacent area where 'admin' is deliberately
-    // NOT treated as a manager: admin marks their own attendance like any
-    // other employee, and only super_admin/HR can view or edit everyone
-    // else's records. Scoped narrowly to the /attendance collection below —
-    // isHR() keeps including 'admin' everywhere else (leave, comp-off,
-    // dailyReports, devices, users), which is unchanged.
-    function isAttendanceManager() {
-      return myRole() in ['super_admin', 'hr'];
-    }
-
     function isProjectOps() {
       return myRole() in ['super_admin', 'admin', 'project_manager'];
     }
@@ -47,6 +37,14 @@ service cloud.firestore {
       return isProjectOps() || isHR();
     }
 
+    // Lets someone assigned to at least one of a project's deliverables
+    // (Photo Editing, Album Designing, etc.) read that project's events —
+    // and therefore log storage for them — without being added to any
+    // event's team/cost list. assignedDeliverableUids is denormalized onto
+    // the project doc by syncProjectDeliverableAssigneeUids() in
+    // deliverables.js every time a deliverable's assignedUid changes, since
+    // rules can't run a query across the deliverables subcollection. Falls
+    // back to an empty list for projects created before this field existed.
     function isDeliverableAssigneeOfProject(projectId) {
       return isSignedIn() &&
         get(/databases/$(database)/documents/projects/$(projectId)).data
@@ -59,22 +57,26 @@ service cloud.firestore {
         request.resource.data.status in ['accepted', 'declined'];
     }
 
+    // A team member on this event can post their own assignment note (e.g.
+    // via the Daily Report's "assigned events" update, or their own team
+    // view) without full project-ops access. Scoped two ways:
+    //  1. Only 'team' and 'updatedAt' may change (mirrors the deliverables
+    //     assignee rule below) — dates, status, teamNotes etc. stay
+    //     admin/PM-only.
+    //  2. They must currently be listed in assignedUids, i.e. already a
+    //     team member — this doesn't let anyone add themselves.
+    // Note: like the deliverables self-update rule, this checks which
+    // *fields* changed, not which array element within 'team' changed — a
+    // signed-in team member could technically rewrite another member's
+    // assignments array via a hand-crafted request, since Firestore rules
+    // can't cheaply diff individual array entries by uid. The app's own
+    // client code never does this (addTeamAssignmentNote only ever patches
+    // the caller's own entry), so this is the same trust boundary already
+    // accepted for deliverable notes, not a new one — just flagging it.
     function isSelfUpdatingOwnAssignment(projectId, eventId) {
       return isSignedIn() &&
         resource.data.get('assignedUids', []).hasAny([request.auth.uid]) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['team', 'updatedAt']);
-    }
-
-    // Any signed-in employee may thumbs-up the dashboard note, but ONLY by
-    // adding or removing their own key inside the `acks` map. The note text,
-    // author and timestamp stay project-ops-only, and nobody can acknowledge
-    // on someone else's behalf. get('acks', {}) covers notes posted before
-    // the field existed, which have no acks map at all.
-    function isOwnAnnouncementAck() {
-      return isSignedIn() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acks']) &&
-        request.resource.data.get('acks', {}).diff(resource.data.get('acks', {}))
-          .affectedKeys().hasOnly([request.auth.uid]);
     }
 
     // --- users (employee profiles) ---
@@ -85,13 +87,11 @@ service cloud.firestore {
     }
 
     // --- attendance --- (doc id pattern: {employeeUid}_{date})
-    // 'admin' is intentionally NOT an attendance manager here — admin can
-    // only get/list/update their own record, same as any employee.
     match /attendance/{docId} {
-      allow get: if isAttendanceManager() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
-      allow list: if isAttendanceManager() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      allow get: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      allow list: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
       allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid && docId.split('_')[0] == request.auth.uid;
-      allow update: if isAttendanceManager() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      allow update: if isHR() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
       allow delete: if isAdmin();
     }
 
@@ -137,17 +137,25 @@ service cloud.firestore {
     // --- leads (admin/PM only) ---
     match /leads/{leadId} {
       allow read, write: if isProjectOps();
+
       match /activities/{activityId} {
         allow read, create: if isProjectOps();
         allow update, delete: if isAdmin();
       }
     }
 
+    // --- enquiryResponses (admin/PM only) --- raw public enquiry form
+    // submissions — every question and answer as originally submitted,
+    // written server-side via the Admin SDK in /api/leads/public-submit,
+    // which bypasses these rules entirely. Read-only from the client:
+    // there's no legitimate reason for the app itself to create, edit, or
+    // delete a submission record.
     match /enquiryResponses/{responseId} {
       allow read: if isProjectOps();
       allow create, update, delete: if false;
     }
 
+    // --- quotations ---
     match /quotations/{quotationId} {
       allow get: if true;
       allow list: if isProjectOps();
@@ -156,6 +164,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // --- quotation numbering (Q-0001, Q-0002, ...), one running counter ---
     match /counters/{counterId} {
       allow read, create, update: if isProjectOps();
       allow delete: if false;
@@ -179,16 +188,19 @@ service cloud.firestore {
       allow write: if isProjectOps();
     }
 
+    // --- invoices --- (financial data — admin/PM only)
     match /invoices/{invoiceId} {
       allow read: if isProjectOps();
       allow create, update, delete: if isProjectOps();
     }
 
+    // --- expenses --- (financial data — admin/PM only)
     match /expenses/{expenseId} {
       allow read: if isProjectOps();
       allow create, update, delete: if isProjectOps();
     }
 
+    // --- postProdTasks ---
     match /postProdTasks/{taskId} {
       allow read: if isSignedIn();
       allow create, delete: if isProjectOps();
@@ -197,20 +209,23 @@ service cloud.firestore {
         (isSignedIn() && ('assignedUids' in resource.data) && resource.data.assignedUids.hasAny([request.auth.uid]));
     }
 
+    // --- storageEntries ---
+    // Create is self-service, but gated: you can only log storage for
+    // yourself (memberUid == you), and only if you're currently assigned
+    // to a deliverable on that project — i.e. storage logging is a
+    // post-production responsibility, not something any signed-in
+    // employee can do for any event. Admins/PMs can always create/fix/
+    // remove entries for anyone.
     match /storageEntries/{entryId} {
       allow read: if isSignedIn();
       allow create: if isProjectOps() ||
-        (isSignedIn() && request.resource.data.loggedByUid == request.auth.uid &&
+        (isSignedIn() && request.resource.data.memberUid == request.auth.uid &&
           isDeliverableAssigneeOfProject(request.resource.data.projectId));
       allow update, delete: if isProjectOps() ||
-        (isSignedIn() && resource.data.loggedByUid == request.auth.uid);
+        (isSignedIn() && resource.data.memberUid == request.auth.uid);
     }
 
-    match /rateCards/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isProjectOps();
-    }
-
+    // --- notifications ---
     match /notifications/{docId} {
       allow read, list: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow create: if isSignedIn();
@@ -219,15 +234,17 @@ service cloud.firestore {
     }
 
     // --- announcements ---
-    // Split from a blanket `write` so employees can acknowledge the
-    // dashboard note (see isOwnAnnouncementAck) while posting, editing and
-    // removing it stay project-ops-only.
     match /announcements/{docId} {
       allow read: if isSignedIn();
-      allow create, delete: if isProjectOps();
-      allow update: if isProjectOps() || isOwnAnnouncementAck();
+      allow write: if isProjectOps();
     }
 
+    // --- projects ---
+    // Read access is intentionally broad now: the Post-Production dashboard
+    // shows the full org-wide admin view to every signed-in employee, not
+    // just isCalendarViewer()/project leaders, so get/list can't be gated
+    // to those roles anymore. Write access (create/update/delete) is
+    // unchanged and stays restricted to project ops / the project leader.
     match /projects/{projectId} {
       allow get: if isSignedIn();
       allow list: if isSignedIn();
@@ -235,6 +252,10 @@ service cloud.firestore {
       allow update: if isProjectOps() || (isSignedIn() && resource.data.leaderUid == request.auth.uid);
       allow delete: if isAdmin();
 
+      // Deliverable status/notes can also be updated by the assigned
+      // employee themself, but ONLY the status/updates/updatedAt fields —
+      // reassignment, dates, etc. stay admin/PM-only. Mirrors the pattern
+      // used for postProdTasks.
       match /deliverables/{deliverableId} {
         allow read: if isSignedIn();
         allow create, delete: if isProjectOps();
@@ -244,6 +265,12 @@ service cloud.firestore {
               .hasOnly(['status', 'updates', 'updatedAt']));
       }
 
+      // Same broadening as the project doc itself: any signed-in employee
+      // can read a project's events now that the dashboard is universal.
+      // Write access is mostly unchanged, plus a narrow self-service path
+      // (see isSelfUpdatingOwnAssignment) so an assigned team member can
+      // post their own assignment note — e.g. from the Daily Report's
+      // "assigned events" update — without project-ops access.
       match /events/{eventId} {
         allow get: if isSignedIn();
         allow list: if isSignedIn();
@@ -261,10 +288,17 @@ service cloud.firestore {
       }
     }
 
+    // Collection-group counterpart to /projects/{id}/events above, used by
+    // getAllEvents()-style queries that read across every project at once.
+    // Broadened the same way as the direct subcollection rule.
     match /{path=**}/events/{eventId} {
       allow list: if isSignedIn();
     }
 
+    // Collection-group counterpart to /projects/{id}/deliverables above —
+    // lets an employee run a collectionGroup query ("my deliverables",
+    // filtered by assignedUid == me) across every project without needing
+    // list access to /projects itself.
     match /{path=**}/deliverables/{deliverableId} {
       allow list: if isProjectOps() ||
         (isSignedIn() && resource.data.assignedUid == request.auth.uid);
