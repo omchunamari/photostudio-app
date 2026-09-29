@@ -174,7 +174,7 @@ export default function NotificationsPage() {
     <ProtectedRoute>
       <DeviceGate>
         <NotificationsContent />
-      </DeviceGate>
+      </DeviceGate> 
     </ProtectedRoute>
   );
 }
