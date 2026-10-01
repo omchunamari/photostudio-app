@@ -85,11 +85,12 @@ export async function updateInvoice(id, data) {
  * today's date as the collection date; reverting to unpaid clears it, so a
  * mis-click can't leave a stale payment date behind inflating cash-flow.
  */
-export async function setInvoiceStatus(id, status, paidAt) {
+export async function setInvoiceStatus(id, status, paidAt, accountId) {
   await updateDoc(doc(db, "invoices", id), {
     status,
     paidAt: status === "paid" ? paidAt || todayISO() : null,
-    ...(status === "paid" ? {} : { accountId: null }),
+    // Paid: record the account it landed in (when given). Unpaid: clear it so the balance reverts.
+    ...(status === "paid" ? (accountId !== undefined ? { accountId: accountId || null } : {}) : { accountId: null }),
     updatedAt: new Date().toISOString(),
   });
 }

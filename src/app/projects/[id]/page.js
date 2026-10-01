@@ -716,15 +716,41 @@ function ProjectDetailContent() {
     }
   }
 
-  async function handleToggleInvoiceStatus(inv) {
+  // Marking an invoice paid asks where the money landed (when the user can see
+  // accounts), so the Cash/Bank balance moves at that moment, not later.
+  const [payInvoice, setPayInvoice] = useState(null);
+  const [payAccount, setPayAccount] = useState("");
+  const [payDate, setPayDate] = useState("");
+
+  function handleToggleInvoiceStatus(inv) {
+    if (inv.status !== "paid" && financeAccounts.length > 0) {
+      setPayInvoice(inv);
+      setPayAccount("");
+      setPayDate(new Date().toISOString().slice(0, 10));
+      return;
+    }
+    return toggleInvoiceStatus(inv);
+  }
+
+  async function confirmInvoicePaid() {
+    const inv = payInvoice;
+    setPayInvoice(null);
+    await toggleInvoiceStatus(inv, { accountId: payAccount || null, paidAt: payDate });
+  }
+
+  async function toggleInvoiceStatus(inv, paid = {}) {
     const nextStatus = inv.status === "paid" ? "unpaid" : "paid";
     // Mirror the paidAt stamp setInvoiceStatus writes, so the optimistic
     // local row matches what's in Firestore without a refetch.
-    const nextPaidAt = nextStatus === "paid" ? new Date().toISOString().slice(0, 10) : null;
+    const nextPaidAt = nextStatus === "paid" ? paid.paidAt || new Date().toISOString().slice(0, 10) : null;
     try {
-      await setInvoiceStatus(inv.id, nextStatus, nextPaidAt);
+      await setInvoiceStatus(inv.id, nextStatus, nextPaidAt, paid.accountId);
       setInvoices((prev) =>
-        prev.map((i) => (i.id === inv.id ? { ...i, status: nextStatus, paidAt: nextPaidAt } : i))
+        prev.map((i) =>
+          i.id === inv.id
+            ? { ...i, status: nextStatus, paidAt: nextPaidAt, accountId: nextStatus === "paid" ? paid.accountId ?? i.accountId ?? null : null }
+            : i
+        )
       );
       toast.success(nextStatus === "paid" ? "Marked as paid" : "Marked as unpaid");
     } catch (err) {
@@ -1801,6 +1827,43 @@ function ProjectDetailContent() {
           }}
         />
       )}
+
+      <Dialog open={!!payInvoice} onOpenChange={(o) => !o && setPayInvoice(null)}>
+        <DialogContent className="w-[95vw] max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Mark {payInvoice?.invoiceNumber} as paid</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div>
+              <Label>Received into account</Label>
+              <SearchableSelect
+                value={payAccount}
+                onValueChange={setPayAccount}
+                options={financeAccounts.map((a) => ({ value: a.id, label: a.name }))}
+                placeholder="Select account..."
+              />
+            </div>
+            <div>
+              <Label htmlFor="payInvoiceDate">Date received</Label>
+              <Input id="payInvoiceDate" type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+            </div>
+            <Button onClick={confirmInvoicePaid} disabled={!payAccount || !payDate}>
+              Mark as paid
+            </Button>
+            <button
+              type="button"
+              className="text-xs text-slate-500 hover:underline"
+              onClick={() => {
+                const inv = payInvoice;
+                setPayInvoice(null);
+                toggleInvoiceStatus(inv);
+              }}
+            >
+              Skip — assign the account later in Finance
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={addDeliverableOpen} onOpenChange={setAddDeliverableOpen}>
         <DialogContent className="w-[95vw] max-w-sm">
