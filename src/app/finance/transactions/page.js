@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Tags, CheckCircle2 } from "lucide-react";
-import FinanceShell from "@/components/finance/FinanceShell";
+import { Plus, Pencil, Trash2, Tags, CheckCircle2, ArrowLeftRight, SlidersHorizontal } from "lucide-react";
+import FinanceShell, { Stat, PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import TransactionDialog from "@/components/finance/TransactionDialog";
 import CategoryManager from "@/components/finance/CategoryManager";
 import { useAuth } from "@/contexts/AuthContext";
@@ -33,12 +33,12 @@ const KIND_FILTER = [
 ];
 
 const KIND_TONE = {
-  income: "text-emerald-600",
-  expense: "text-red-600",
-  transfer: "text-slate-600",
-  advance: "text-amber-600",
-  advance_return: "text-emerald-600",
-  loan_in: "text-emerald-600",
+  income: "text-success",
+  expense: "text-destructive",
+  transfer: "text-muted-foreground",
+  advance: "text-warning",
+  advance_return: "text-success",
+  loan_in: "text-success",
 };
 
 // Older project-page invoices / expenses that were never tied to a Cash/Bank account.
@@ -57,6 +57,10 @@ function Content() {
 
   const accountName = (id) => data.accounts.find((a) => a.id === id)?.name || "—";
   const set = (p) => setFilters((f) => ({ ...f, ...p }));
+  const [showFilters, setShowFilters] = useState(false);
+  const EMPTY_FILTERS = { kind: "all", accountId: "", projectId: "", category: "", from: "", to: "", q: "" };
+  const activeFilters = ["accountId", "projectId", "category", "from", "to"].filter((k) => filters[k]).length + (filters.kind !== "all" ? 1 : 0) + (filters.q ? 1 : 0);
+  const clearFilters = () => setFilters(EMPTY_FILTERS);
 
   const rows = useMemo(() => {
     let list = filterTransactions(data.all, filters);
@@ -120,6 +124,75 @@ function Content() {
   }
 
   const missingAccount = data.all.filter(needsAccount).length;
+  // --- shared row pieces, used by both the phone cards and the desktop table ---
+  const amountText = (t) =>
+    `${t.kind === "expense" || t.kind === "advance" ? "−" : t.kind === "transfer" ? "" : "+"}${inr(t.amount)}`;
+
+  function badges(t) {
+    return (
+      <>
+        {t.status === "pending" && <span className="ml-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">UNPAID</span>}
+        {t.legacy && <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">PROJECT PAGE</span>}
+      </>
+    );
+  }
+
+  function accountCell(t) {
+    if (needsAccount(t)) {
+      return (
+        <button
+          type="button"
+          className="rounded bg-warning/15 px-1.5 py-0.5 text-xs font-medium text-warning hover:bg-warning/25"
+          onClick={() => {
+            setAssignTarget(t);
+            setAssignAccount("");
+          }}
+        >
+          Assign account
+        </button>
+      );
+    }
+    if (t.kind === "transfer") return `${accountName(t.accountId)} → ${accountName(t.toAccountId)}`;
+    if (t.paidFrom === "allowance") return "From allowance";
+    return t.accountId ? accountName(t.accountId) : "—";
+  }
+
+  // Rows made by salary / EMI / allowance flows are edited there. Older
+  // project-page expenses can be deleted here (not edited); their invoices can't.
+  function actionsFor(t) {
+    const locked = t.legacy ? !t.id.startsWith("legacy-exp-") : t.source && t.source !== "manual";
+    const deleteOnly = t.legacy && t.id.startsWith("legacy-exp-");
+    const out = [];
+    if (t.status === "pending" && !t.legacy)
+      out.push(
+        <Button
+          key="pay"
+          variant="ghost"
+          size="sm"
+          title="Mark paid"
+          onClick={() => {
+            setPayTarget(t);
+            setPayForm({ accountId: "", date: new Date().toISOString().slice(0, 10) });
+          }}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" /> <span className="md:hidden">Mark paid</span>
+        </Button>
+      );
+    if (!locked && !deleteOnly)
+      out.push(
+        <Button key="edit" variant="ghost" size="sm" aria-label="Edit" onClick={() => setDialog({ open: true, initial: t })}>
+          <Pencil className="h-3.5 w-3.5" /> <span className="md:hidden">Edit</span>
+        </Button>
+      );
+    if (!locked || deleteOnly)
+      out.push(
+        <Button key="del" variant="ghost" size="sm" aria-label="Delete" onClick={() => handleDelete(t)}>
+          <Trash2 className="h-3.5 w-3.5 text-destructive" /> <span className="md:hidden">Delete</span>
+        </Button>
+      );
+    return out.length ? out : null;
+  }
+
   const accountOptions = data.accounts.filter((a) => a.active !== false).map((a) => ({ value: a.id, label: a.name }));
 
   return (
@@ -138,15 +211,15 @@ function Content() {
       }
     >
       {payouts.length > 0 && (
-        <Card className="mb-4 border-amber-200 bg-amber-50/50">
+        <Card className="mb-4 border-warning/30 bg-warning/5">
           <CardContent className="p-4">
-            <p className="mb-2 text-sm font-medium text-slate-900">Freelancer payouts due ({payouts.length})</p>
+            <p className="mb-2 text-sm font-medium text-foreground">Freelancer payouts due ({payouts.length})</p>
             <div className="flex flex-col gap-2">
               {payouts.map((s) => (
-                <div key={s.key} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white p-2 text-sm">
+                <div key={s.key} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card p-2 text-sm">
                   <span>
                     <span className="font-medium">{s.personName}</span>{" "}
-                    <span className="text-slate-500">
+                    <span className="text-muted-foreground">
                       · {s.projectName} · {s.days} day{s.days > 1 ? "s" : ""} @ {inr(s.dayRate)} · <b>{inr(s.amount)}</b> due
                       {s.alreadyPaid > 0 && ` (${inr(s.alreadyPaid)} already paid)`}
                     </span>
@@ -180,176 +253,158 @@ function Content() {
         </Card>
       )}
 
+      {/* Summary of what the current filters show */}
+      <div className="mb-3 grid grid-cols-3 gap-2.5 sm:gap-3">
+        <Stat label="Money in" value={inr(totalIn)} tone="positive" />
+        <Stat label="Money out" value={inr(totalOut)} tone={totalOut ? "negative" : "neutral"} />
+        <Stat label="Entries" value={String(rows.length)} />
+      </div>
+
       <Card className="mb-4">
-        <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <Label>Search</Label>
-            <Input value={filters.q} onChange={(e) => set({ q: e.target.value })} placeholder="Description, person, project..." />
+        <CardContent className="flex flex-col gap-3 p-3 sm:p-4">
+          <div className="flex items-center gap-2">
+            <Input value={filters.q} onChange={(e) => set({ q: e.target.value })} placeholder="Search description, person, project..." />
+            <Button variant="outline" size="sm" className="md:hidden" onClick={() => setShowFilters((v) => !v)} aria-expanded={showFilters}>
+              <SlidersHorizontal className="h-4 w-4" />
+              Filters{activeFilters > 0 ? ` (${activeFilters})` : ""}
+            </Button>
+            {activeFilters > 0 && (
+              <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
           </div>
-          <div>
-            <Label>Type</Label>
-            <SearchableSelect value={filters.kind} onValueChange={(v) => set({ kind: v })} options={KIND_FILTER} />
-          </div>
-          <div>
-            <Label>Account</Label>
-            <SearchableSelect
-              value={filters.accountId || "all"}
-              onValueChange={(v) => set({ accountId: v === "all" ? "" : v })}
-              options={[{ value: "all", label: "All accounts" }, ...accountOptions]}
-            />
-          </div>
-          <div>
-            <Label>Project</Label>
-            <SearchableSelect
-              value={filters.projectId || "all"}
-              onValueChange={(v) => set({ projectId: v === "all" ? "" : v })}
-              options={[{ value: "all", label: "All projects" }, ...data.projects.map((p) => ({ value: p.id, label: p.projectName }))]}
-              alwaysSearch
-            />
-          </div>
-          <div>
-            <Label>Category</Label>
-            <SearchableSelect
-              value={filters.category || "all"}
-              onValueChange={(v) => set({ category: v === "all" ? "" : v })}
-              options={[{ value: "all", label: "All categories" }, ...allCategories]}
-            />
-          </div>
-          <div>
-            <Label>From</Label>
-            <Input type="date" value={filters.from} onChange={(e) => set({ from: e.target.value })} />
-          </div>
-          <div>
-            <Label>To</Label>
-            <Input type="date" value={filters.to} onChange={(e) => set({ to: e.target.value })} />
-          </div>
-          <div className="flex items-end gap-4 text-sm">
+          <div className={`${showFilters ? "grid" : "hidden"} grid-cols-1 gap-3 sm:grid-cols-2 md:grid lg:grid-cols-3`}>
             <div>
-              <p className="text-xs text-slate-500">In</p>
-              <p className="font-semibold text-emerald-600">{inr(totalIn)}</p>
+              <Label>Type</Label>
+              <SearchableSelect value={filters.kind} onValueChange={(v) => set({ kind: v })} options={KIND_FILTER} />
             </div>
             <div>
-              <p className="text-xs text-slate-500">Out</p>
-              <p className="font-semibold text-red-600">{inr(totalOut)}</p>
+              <Label>Account</Label>
+              <SearchableSelect
+                value={filters.accountId || "all"}
+                onValueChange={(v) => set({ accountId: v === "all" ? "" : v })}
+                options={[{ value: "all", label: "All accounts" }, ...accountOptions]}
+              />
             </div>
+            <div>
+              <Label>Project</Label>
+              <SearchableSelect
+                value={filters.projectId || "all"}
+                onValueChange={(v) => set({ projectId: v === "all" ? "" : v })}
+                options={[{ value: "all", label: "All projects" }, ...data.projects.map((p) => ({ value: p.id, label: p.projectName }))]}
+                alwaysSearch
+              />
+            </div>
+            <div>
+              <Label>Category</Label>
+              <SearchableSelect
+                value={filters.category || "all"}
+                onValueChange={(v) => set({ category: v === "all" ? "" : v })}
+                options={[{ value: "all", label: "All categories" }, ...allCategories]}
+              />
+            </div>
+            <div>
+              <Label>From</Label>
+              <Input type="date" value={filters.from} onChange={(e) => set({ from: e.target.value })} />
+            </div>
+            <div>
+              <Label>To</Label>
+              <Input type="date" value={filters.to} onChange={(e) => set({ to: e.target.value })} />
+            </div>
+            {activeFilters > 0 && (
+              <Button variant="ghost" size="sm" className="md:hidden" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
 
       {data.loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={0} rows={6} />
       ) : rows.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center text-sm text-slate-500">No transactions match.</CardContent>
-        </Card>
+        <EmptyState icon={ArrowLeftRight} title="No transactions match" hint="Try clearing a filter, or add a new transaction." />
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Project / person</TableHead>
-                  <TableHead>Account</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="w-28" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((t) => {
-                  // Rows made by salary / EMI / allowance flows are edited there. Older
-                  // project-page expenses can be deleted here (not edited); their invoices can't.
-                  const locked = t.legacy ? !t.id.startsWith("legacy-exp-") : t.source && t.source !== "manual";
-                  const deleteOnly = t.legacy && t.id.startsWith("legacy-exp-");
-                  return (
+        <>
+          {/* Phone: one card per transaction */}
+          <div className="flex flex-col gap-2 md:hidden">
+            {rows.map((t) => (
+              <div key={t.id} className="rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{t.category || KIND_LABELS[t.kind]}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {[t.projectName || (t.kind === "transfer" ? "" : "Company"), t.personName].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                  <p className={`shrink-0 text-base font-semibold tabular-nums ${KIND_TONE[t.kind]}`}>{amountText(t)}</p>
+                </div>
+                {t.description && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{t.description}</p>}
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  <span>{formatDateIST(t.date)}</span>
+                  <span>·</span>
+                  <span className={KIND_TONE[t.kind]}>{KIND_LABELS[t.kind]}</span>
+                  <span>·</span>
+                  {accountCell(t)}
+                  {badges(t)}
+                </div>
+                {actionsFor(t) && <div className="mt-2 flex items-center justify-end gap-1 border-t border-border pt-2">{actionsFor(t)}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Tablet / desktop: table */}
+          <Card className="hidden md:flex">
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Project / person</TableHead>
+                    <TableHead>Account</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="w-28" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((t) => (
                     <TableRow key={t.id}>
                       <TableCell className="whitespace-nowrap">{formatDateIST(t.date)}</TableCell>
                       <TableCell>
                         <span className={`text-xs font-medium ${KIND_TONE[t.kind]}`}>{KIND_LABELS[t.kind]}</span>
-                        {t.status === "pending" && <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">UNPAID</span>}
-                        {t.legacy && <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">PROJECT PAGE</span>}
+                        {badges(t)}
                       </TableCell>
                       <TableCell>
                         {t.category}
-                        {t.description && <p className="max-w-56 truncate text-xs text-slate-500">{t.description}</p>}
+                        {t.description && <p className="max-w-56 truncate text-xs text-muted-foreground">{t.description}</p>}
                       </TableCell>
                       <TableCell>
                         {t.projectName || (t.kind === "transfer" ? "" : "Company")}
-                        {t.personName && <p className="text-xs text-slate-500">{t.personName}</p>}
-                        {t.payee && <p className="text-xs text-slate-500">Payee: {t.payee}</p>}
+                        {t.personName && <p className="text-xs text-muted-foreground">{t.personName}</p>}
+                        {t.payee && <p className="text-xs text-muted-foreground">Payee: {t.payee}</p>}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {needsAccount(t) ? (
-                          <button
-                            type="button"
-                            className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-200"
-                            onClick={() => {
-                              setAssignTarget(t);
-                              setAssignAccount("");
-                            }}
-                          >
-                            Assign account
-                          </button>
-                        ) : t.kind === "transfer"
-                          ? `${accountName(t.accountId)} → ${accountName(t.toAccountId)}`
-                          : t.paidFrom === "allowance"
-                            ? "From allowance"
-                            : t.accountId
-                              ? accountName(t.accountId)
-                              : "—"}
-                      </TableCell>
-                      <TableCell className={`whitespace-nowrap text-right font-medium ${KIND_TONE[t.kind]}`}>
-                        {t.kind === "expense" || t.kind === "advance" ? "−" : t.kind === "transfer" ? "" : "+"}
-                        {inr(t.amount)}
-                      </TableCell>
+                      <TableCell className="whitespace-nowrap">{accountCell(t)}</TableCell>
+                      <TableCell className={`whitespace-nowrap text-right font-medium tabular-nums ${KIND_TONE[t.kind]}`}>{amountText(t)}</TableCell>
                       <TableCell>
-                        <div className="flex items-center justify-end gap-1">
-                          {t.status === "pending" && !t.legacy && (
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              title="Mark paid"
-                              onClick={() => {
-                                setPayTarget(t);
-                                setPayForm({ accountId: "", date: new Date().toISOString().slice(0, 10) });
-                              }}
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                            </Button>
-                          )}
-                          {!locked && (
-                            <>
-                              <Button variant="ghost" size="icon-sm" onClick={() => setDialog({ open: true, initial: t })}>
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(t)}>
-                                <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                              </Button>
-                            </>
-                          )}
-                          {deleteOnly && (
-                            <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(t)}>
-                              <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                            </Button>
-                          )}
-                        </div>
+                        <div className="flex items-center justify-end gap-1">{actionsFor(t)}</div>
                       </TableCell>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </>
       )}
       {missingAccount > 0 && filters.kind !== "noaccount" && (
-        <button type="button" onClick={() => set({ kind: "noaccount" })} className="mt-3 text-sm font-medium text-amber-700 hover:underline">
+        <button type="button" onClick={() => set({ kind: "noaccount" })} className="mt-3 text-sm font-medium text-warning hover:underline">
           {missingAccount} older project-page entr{missingAccount === 1 ? "y has" : "ies have"} no Cash/Bank account — review them →
         </button>
       )}
-      <p className="mt-2 text-xs text-slate-500">
+      <p className="mt-2 text-xs text-muted-foreground">
         Salary, EMI, allowance and advance rows are created by their own screens and are edited there. Rows tagged
         “Project page” come from invoices / expenses entered on a project page; they count in every P&L, and move a Cash/Bank balance once you assign an account.
       </p>
@@ -370,7 +425,7 @@ function Content() {
             <DialogTitle>Assign account — {assignTarget ? inr(assignTarget.amount) : ""}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted-foreground">
               {assignTarget?.kind === "income" ? "Which account did this payment land in?" : "Which account was this paid from?"}{" "}
               The account balance updates immediately.
             </p>

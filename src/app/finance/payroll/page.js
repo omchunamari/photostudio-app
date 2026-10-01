@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Calculator, Download, Wallet, Undo2, SlidersHorizontal } from "lucide-react";
-import FinanceShell, { Stat } from "@/components/finance/FinanceShell";
+import { Calculator, Download, Wallet, Undo2, SlidersHorizontal, Banknote, CheckCircle2, Clock } from "lucide-react";
+import FinanceShell, { Stat, PageSkeleton } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import {
@@ -209,16 +209,92 @@ function Content() {
         </>
       }
     >
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <Stat label={`Payable — ${monthLabel(month)}`} value={inr(totals.net)} />
-        <Stat label="Paid" value={inr(totals.paid)} tone="positive" />
-        <Stat label="Salary pending" value={inr(totals.pending)} tone={totals.pending ? "warning" : "neutral"} />
+      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
+        <div className="col-span-2 sm:col-span-1"><Stat icon={Banknote} label={`Payable — ${monthLabel(month)}`} value={inr(totals.net)} /></div>
+        <Stat icon={CheckCircle2} label="Paid" value={inr(totals.paid)} tone="positive" />
+        <Stat icon={Clock} label="Salary pending" value={inr(totals.pending)} tone={totals.pending ? "warning" : "neutral"} />
       </div>
 
       {data.loading || !leaveSrc.loaded ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={0} rows={6} />
       ) : (
-        <Card>
+        <>
+          {/* Phone: one card per employee */}
+          <div className="flex flex-col gap-2 md:hidden">
+            {rows.map((r) => {
+              const p = r.payroll;
+              if (!p)
+                return (
+                  <div key={r.emp.uid} className="rounded-xl bg-card p-3 text-sm shadow-xs ring-1 ring-foreground/10">
+                    <p className="font-medium">{r.emp.name}</p>
+                    <p className="text-xs text-muted-foreground">Salary not set — add it under Employees</p>
+                  </div>
+                );
+              const status = p.status;
+              return (
+                <div key={r.emp.uid} className="rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{r.emp.name}</p>
+                      <p className="text-xs text-muted-foreground">{r.emp.employeeId}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-semibold tabular-nums">{inr(p.netSalary)}</p>
+                      <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${status === "paid" ? "bg-success/10 text-success" : status === "processed" ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground"}`}>
+                        {status === "paid" ? "Paid" : status === "processed" ? "Processed" : "Draft"}
+                      </span>
+                    </div>
+                  </div>
+                  <dl className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                    {[
+                      ["Salary", inr(p.salary)],
+                      ["Paid days", `${p.paidDays}/${p.daysInMonth}`],
+                      ["Leave", p.leaveDays],
+                      ["LOP", p.lopDays, p.lopDays ? "text-destructive" : ""],
+                      ["LOP ded.", p.lopDeduction ? inr(p.lopDeduction) : "—"],
+                      ["Advance", p.advanceRecovery ? inr(p.advanceRecovery) : "—"],
+                    ].map(([k, v, cls]) => (
+                      <div key={k} className="rounded-lg bg-muted/50 p-2">
+                        <dt className="text-muted-foreground">{k}</dt>
+                        <dd className={`font-medium tabular-nums ${cls || ""}`}>{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {p.otherDeduction ? <p className="mt-1.5 text-xs text-muted-foreground">Other deduction: {inr(p.otherDeduction)}</p> : null}
+                  <div className="mt-2 flex items-center justify-end gap-1 border-t border-border pt-2">
+                    {!r.locked && (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={() => setAdjTarget(r)}>
+                          <SlidersHorizontal className="h-3.5 w-3.5" /> Adjust
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setPayTarget(r);
+                            setPayForm({ accountId: "", date: getISTDateStr() });
+                          }}
+                        >
+                          Pay
+                        </Button>
+                      </>
+                    )}
+                    {r.locked && (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={() => downloadPayslipPdf(p, r.emp)}>
+                          <Download className="h-3.5 w-3.5" /> Payslip
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => undo(r)}>
+                          <Undo2 className="h-3.5 w-3.5 text-destructive" /> Reverse
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <Card className="hidden md:flex">
           <CardContent className="p-0">
             <Table>
               <TableHeader>
@@ -243,7 +319,7 @@ function Content() {
                     return (
                       <TableRow key={r.emp.uid}>
                         <TableCell>{r.emp.name}</TableCell>
-                        <TableCell colSpan={10} className="text-slate-400">Salary not set — add it under Employees</TableCell>
+                        <TableCell colSpan={10} className="text-muted-foreground/60">Salary not set — add it under Employees</TableCell>
                       </TableRow>
                     );
                   const status = p.status;
@@ -251,18 +327,18 @@ function Content() {
                     <TableRow key={r.emp.uid}>
                       <TableCell>
                         <p className="font-medium">{r.emp.name}</p>
-                        <p className="text-xs text-slate-500">{r.emp.employeeId}</p>
+                        <p className="text-xs text-muted-foreground">{r.emp.employeeId}</p>
                       </TableCell>
                       <TableCell className="text-right">{inr(p.salary)}</TableCell>
                       <TableCell className="text-right">{p.paidDays}/{p.daysInMonth}</TableCell>
                       <TableCell className="text-right">{p.leaveDays}</TableCell>
-                      <TableCell className={`text-right ${p.lopDays ? "font-medium text-red-600" : ""}`}>{p.lopDays}</TableCell>
+                      <TableCell className={`text-right ${p.lopDays ? "font-medium text-destructive" : ""}`}>{p.lopDays}</TableCell>
                       <TableCell className="text-right">{p.lopDeduction ? inr(p.lopDeduction) : "—"}</TableCell>
                       <TableCell className="text-right">{p.otherDeduction ? inr(p.otherDeduction) : "—"}</TableCell>
                       <TableCell className="text-right">{p.advanceRecovery ? inr(p.advanceRecovery) : "—"}</TableCell>
                       <TableCell className="text-right font-semibold">{inr(p.netSalary)}</TableCell>
                       <TableCell>
-                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${status === "paid" ? "bg-emerald-100 text-emerald-700" : status === "processed" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${status === "paid" ? "bg-success/10 text-success" : status === "processed" ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground"}`}>
                           {status === "paid" ? "Paid" : status === "processed" ? "Processed" : "Draft"}
                         </span>
                       </TableCell>
@@ -291,7 +367,7 @@ function Content() {
                                 <Download className="h-3.5 w-3.5" />
                               </Button>
                               <Button size="icon-sm" variant="ghost" title="Reverse payment" onClick={() => undo(r)}>
-                                <Undo2 className="h-3.5 w-3.5 text-red-600" />
+                                <Undo2 className="h-3.5 w-3.5 text-destructive" />
                               </Button>
                             </>
                           )}
@@ -303,9 +379,10 @@ function Content() {
               </TableBody>
             </Table>
           </CardContent>
-        </Card>
+          </Card>
+        </>
       )}
-      <p className="mt-2 text-xs text-slate-500">
+      <p className="mt-2 text-xs text-muted-foreground">
         LOP = leave days beyond the employee’s yearly paid leaves (approved leave + auto-marked absences). LOP deduction =
         salary ÷ days in month × LOP days. “Process month” saves the figures; paying posts the Salary expense from the account you choose.
       </p>
@@ -346,7 +423,7 @@ function Content() {
             <DialogTitle>Pay salary — {inr(allTotal)}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted-foreground">
               {payTarget === "ALL" ? `${payable.filter((r) => r.saved).length} processed salaries` : payTarget?.emp?.name} · {monthLabel(month)}
             </p>
             <div>

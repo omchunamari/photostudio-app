@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Plus, Receipt, HandCoins, Trash2 } from "lucide-react";
-import FinanceShell from "@/components/finance/FinanceShell";
+import FinanceShell, { Stat, PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import TransactionDialog from "@/components/finance/TransactionDialog";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
@@ -101,17 +101,18 @@ function Content() {
             {f}
           </Button>
         ))}
-        <span className="ml-auto text-sm text-slate-600">
-          Open: given <b>{inr(openTotals.given)}</b> · used <b>{inr(openTotals.used)}</b> · with employees <b className="text-amber-600">{inr(openTotals.balance)}</b>
-        </span>
+      </div>
+
+      <div className="mb-4 grid grid-cols-3 gap-2.5 sm:gap-3">
+        <Stat label="Open: given" value={inr(openTotals.given)} />
+        <Stat label="Used" value={inr(openTotals.used)} />
+        <Stat label="With employees" value={inr(openTotals.balance)} tone={openTotals.balance ? "warning" : "neutral"} />
       </div>
 
       {data.loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={0} rows={3} />
       ) : list.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center text-sm text-slate-500">No allowances here yet.</CardContent>
-        </Card>
+        <EmptyState icon={HandCoins} title="No allowances here yet" hint="Give an employee an advance for a project, then log their spends against it." />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {list.map(({ a, s }) => {
@@ -122,34 +123,34 @@ function Content() {
                 <CardContent className="flex flex-col gap-3 p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="font-medium text-slate-900">{a.employeeName}</p>
-                      <p className="text-xs text-slate-500">
+                      <p className="font-medium text-foreground">{a.employeeName}</p>
+                      <p className="text-xs text-muted-foreground">
                         {a.projectName} · {formatDateIST(a.date)}
                       </p>
                     </div>
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${a.status === "open" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${a.status === "open" ? "bg-warning/15 text-warning" : "bg-success/10 text-success"}`}>
                       {a.status === "open" ? "Open" : "Settled"}
                     </span>
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-md bg-slate-50 p-2">
-                      <p className="text-[11px] uppercase text-slate-500">Advance given</p>
+                    <div className="rounded-md bg-muted/50 p-2">
+                      <p className="text-[11px] uppercase text-muted-foreground">Advance given</p>
                       <p className="font-semibold">{inr(s.given)}</p>
                     </div>
-                    <div className="rounded-md bg-slate-50 p-2">
-                      <p className="text-[11px] uppercase text-slate-500">Used</p>
+                    <div className="rounded-md bg-muted/50 p-2">
+                      <p className="text-[11px] uppercase text-muted-foreground">Used</p>
                       <p className="font-semibold">{inr(s.used)}</p>
                     </div>
-                    <div className="rounded-md bg-slate-50 p-2">
-                      <p className="text-[11px] uppercase text-slate-500">Balance</p>
-                      <p className={`font-semibold ${s.balance < 0 ? "text-red-600" : "text-amber-600"}`}>{inr(s.balance)}</p>
+                    <div className="rounded-md bg-muted/50 p-2">
+                      <p className="text-[11px] uppercase text-muted-foreground">Balance</p>
+                      <p className={`font-semibold ${s.balance < 0 ? "text-destructive" : "text-warning"}`}>{inr(s.balance)}</p>
                     </div>
                   </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full bg-success" style={{ width: `${pct}%` }} />
                   </div>
                   {spends.length > 0 && (
-                    <ul className="max-h-32 divide-y divide-slate-100 overflow-y-auto text-xs">
+                    <ul className="max-h-32 divide-y divide-border overflow-y-auto text-xs">
                       {spends.map((t) => (
                         <li key={t.id} className="flex justify-between py-1">
                           <span>
@@ -178,7 +179,7 @@ function Content() {
                       </Button>
                       {spends.length === 0 && (
                         <Button size="sm" variant="ghost" onClick={() => handleDelete(a)}>
-                          <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       )}
                     </div>
@@ -234,12 +235,12 @@ function Content() {
           </DialogHeader>
           {settle && (
             <div className="flex flex-col gap-3">
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-muted-foreground">
                 Unspent balance: <b>{inr(settle.balance)}</b>
               </p>
               {settle.balance > 0 && (
                 <>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
                     {[
                       { v: "return", l: "Returned" },
                       { v: "expense", l: "Book as expense" },
@@ -248,7 +249,7 @@ function Content() {
                         key={o.v}
                         type="button"
                         onClick={() => setSettleForm((f) => ({ ...f, mode: o.v }))}
-                        className={`rounded-md px-3 py-1.5 text-sm font-medium ${settleForm.mode === o.v ? "bg-white shadow-sm" : "text-slate-500"}`}
+                        className={`rounded-md px-3 py-1.5 text-sm font-medium ${settleForm.mode === o.v ? "bg-card shadow-sm" : "text-muted-foreground"}`}
                       >
                         {o.l}
                       </button>
@@ -267,7 +268,7 @@ function Content() {
                 </>
               )}
               {settle.balance < 0 && (
-                <p className="rounded-md bg-red-50 p-2 text-xs text-red-700">
+                <p className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
                   The employee spent more than the advance. Reimburse the difference by adding an expense transaction for them.
                 </p>
               )}

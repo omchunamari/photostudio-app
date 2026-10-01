@@ -150,14 +150,14 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
 
         <div className="flex flex-col gap-4">
           {!editing && !fromAllowance && (
-            <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1">
+            <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
               {KINDS.map((k) => (
                 <button
                   key={k.value}
                   type="button"
                   onClick={() => set({ kind: k.value, category: "" })}
                   className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    form.kind === k.value ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                    form.kind === k.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   {k.label}
@@ -195,14 +195,14 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
                 <Label>To account</Label>
                 <SearchableSelect value={form.toAccountId} onValueChange={(v) => set({ toAccountId: v })} options={accountOptions} placeholder="Select..." />
               </div>
-              <p className="col-span-2 text-xs text-slate-500">
+              <p className="col-span-2 text-xs text-muted-foreground">
                 A transfer only moves money between accounts. It is never counted as an expense or income.
               </p>
             </div>
           ) : (
             <>
               {!fromAllowance && (
-                <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
                   {[
                     { v: "project", l: form.kind === "income" ? "Project payment" : "Project expense" },
                     { v: "company", l: form.kind === "income" ? "Other income" : "Company expense" },
@@ -212,7 +212,7 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
                       type="button"
                       onClick={() => set({ scope: o.v, category: "", projectId: o.v === "company" ? "" : form.projectId })}
                       className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                        form.scope === o.v ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                        form.scope === o.v ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                       }`}
                     >
                       {o.l}
@@ -265,7 +265,7 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
               </div>
 
               {form.kind === "expense" && !fromAllowance && (
-                <label className="flex items-start gap-2 rounded-md border border-slate-200 p-2.5 text-sm">
+                <label className="flex items-start gap-2 rounded-md border border-border p-2.5 text-sm">
                   <input
                     type="checkbox"
                     className="mt-0.5"
@@ -273,8 +273,8 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
                     onChange={(e) => set({ pending: e.target.checked, accountId: e.target.checked ? "" : form.accountId })}
                   />
                   <span>
-                    <span className="font-medium text-slate-800">Not paid yet (vendor / other payable)</span>
-                    <span className="block text-xs text-slate-500">
+                    <span className="font-medium text-foreground">Not paid yet (vendor / other payable)</span>
+                    <span className="block text-xs text-muted-foreground">
                       Counts as an expense now; the account is reduced only when you mark it paid.
                     </span>
                   </span>

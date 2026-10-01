@@ -32,20 +32,20 @@ function Content() {
 
   return (
     <AppShell>
-      <h1 className="font-heading text-2xl font-semibold text-slate-900">My payslips</h1>
-      <p className="mb-4 text-sm text-slate-500">Download your salary slips as PDF.</p>
+      <h1 className="font-heading text-xl font-semibold text-foreground sm:text-2xl">My payslips</h1>
+      <p className="mb-4 text-sm text-muted-foreground">Download your salary slips as PDF.</p>
       {slips === null ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <p className="text-sm text-muted-foreground">Loading...</p>
       ) : slips.length === 0 ? (
-        <Card><CardContent className="p-8 text-center text-sm text-slate-500">No payslips available yet.</CardContent></Card>
+        <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">No payslips available yet.</CardContent></Card>
       ) : (
         <div className="flex max-w-2xl flex-col gap-2">
           {slips.map((p) => (
             <Card key={p.id}>
               <CardContent className="flex items-center justify-between gap-3 p-4">
                 <div>
-                  <p className="font-medium text-slate-900">{monthLabel(p.month)}</p>
-                  <p className="text-xs text-slate-500">Paid days {p.paidDays}/{p.daysInMonth} · LOP {p.lopDays}</p>
+                  <p className="font-medium text-foreground">{monthLabel(p.month)}</p>
+                  <p className="text-xs text-muted-foreground">Paid days {p.paidDays}/{p.daysInMonth} · LOP {p.lopDays}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="font-semibold">{inr(p.netSalary)}</span>

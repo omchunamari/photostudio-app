@@ -62,7 +62,7 @@ export default function CategoryManager({ open, onOpenChange, cats, onSaved }) {
         <div className="flex flex-col gap-5">
           {GROUPS.map((g) => (
             <div key={g.key}>
-              <p className="mb-2 text-sm font-medium text-slate-800">{g.label}</p>
+              <p className="mb-2 text-sm font-medium text-foreground">{g.label}</p>
               <div className="flex flex-col gap-1.5">
                 {draft[g.key].map((c, i) => (
                   <div key={i} className="flex items-center gap-2">
@@ -86,7 +86,7 @@ export default function CategoryManager({ open, onOpenChange, cats, onSaved }) {
               </div>
             </div>
           ))}
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-muted-foreground">
             Salary, Loan EMI and Advance are system categories and always exist. Renaming a category only affects new
             entries; old transactions keep the name they were saved with.
           </p>

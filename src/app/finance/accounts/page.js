@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Pencil, Landmark, Wallet } from "lucide-react";
-import FinanceShell, { Stat, signTone } from "@/components/finance/FinanceShell";
+import { Plus, Pencil, Landmark, Wallet, PiggyBank, BookOpen } from "lucide-react";
+import FinanceShell, { Stat, signTone, PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { createAccount, updateAccount, setLegacyAccount } from "@/lib/firebase/finance";
 import { accountLedger } from "@/lib/finance/ledger";
@@ -97,21 +97,21 @@ function Content() {
       }
     >
       {data.loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={4} rows={5} />
       ) : (
         <>
-          <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-5 grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
             {data.accounts.map((a) => (
               <button
                 key={a.id}
                 type="button"
                 onClick={() => setSelectedId(selected?.id === a.id ? "" : a.id)}
-                className={`rounded-lg border bg-white p-4 text-left transition-colors ${
-                  selected?.id === a.id ? "border-emerald-500 ring-1 ring-emerald-500" : "border-slate-200 hover:border-slate-300"
+                className={`rounded-xl border bg-card p-3 text-left shadow-xs transition-colors sm:p-4 ${
+                  selected?.id === a.id ? "border-accent ring-1 ring-accent" : "border-border hover:border-border"
                 } ${a.active === false ? "opacity-60" : ""}`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {a.type === "cash" ? <Wallet className="h-3.5 w-3.5" /> : <Landmark className="h-3.5 w-3.5" />}
                     {a.name}
                   </span>
@@ -120,22 +120,22 @@ function Content() {
                     tabIndex={0}
                     onClick={(e) => (e.stopPropagation(), openEditor(a))}
                     onKeyDown={(e) => e.key === "Enter" && (e.stopPropagation(), openEditor(a))}
-                    className="text-slate-400 hover:text-slate-700"
+                    className="text-muted-foreground/60 hover:text-foreground/80"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </span>
                 </div>
-                <p className={`mt-1 font-heading text-2xl font-semibold ${(data.balances[a.id] || 0) < 0 ? "text-red-600" : "text-slate-900"}`}>
+                <p className={`mt-1 truncate font-heading text-lg font-semibold tabular-nums sm:text-2xl ${(data.balances[a.id] || 0) < 0 ? "text-destructive" : "text-foreground"}`}>
                   {inr(data.balances[a.id] || 0)}
                 </p>
-                {a.active === false && <p className="text-xs text-slate-500">Inactive</p>}
+                {a.active === false && <p className="text-xs text-muted-foreground">Inactive</p>}
               </button>
             ))}
-            <Stat label="Total balance" value={inr(total)} tone={signTone(total)} sub="Active accounts" />
+            <Stat icon={PiggyBank} label="Total balance" value={inr(total)} tone={signTone(total)} sub="Active accounts" />
           </div>
 
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-heading text-lg font-semibold text-slate-900">
+            <h2 className="font-heading text-lg font-semibold text-foreground">
               {selected ? `${selected.name} — ledger` : "All entries"}
             </h2>
             {selected ? (
@@ -143,12 +143,36 @@ function Content() {
                 Show all accounts
               </Button>
             ) : (
-              <p className="text-xs text-slate-500">Click an account above to filter to just that account.</p>
+              <p className="text-xs text-muted-foreground">Click an account above to filter to just that account.</p>
             )}
           </div>
 
           {selected ? (
-            <Card>
+            <>
+            <div className="flex flex-col gap-2 md:hidden">
+              <div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Opening balance</span>
+                <span className="font-medium tabular-nums">{inr(selected.openingBalance || 0)}</span>
+              </div>
+              {ledger.map(({ tx, delta, balance }, i) => (
+                <div key={`${tx.id}-${i}`} className="rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{KIND_LABELS[tx.kind]} · {tx.category}</p>
+                      <p className="truncate text-xs text-muted-foreground">{[tx.projectName, tx.personName, tx.description].filter(Boolean).join(" · ")}</p>
+                    </div>
+                    <p className={`shrink-0 font-semibold tabular-nums ${delta > 0 ? "text-success" : "text-destructive"}`}>
+                      {delta > 0 ? "+" : "−"}{inr(Math.abs(delta))}
+                    </p>
+                  </div>
+                  <div className="mt-1.5 flex justify-between text-xs text-muted-foreground">
+                    <span>{formatDateIST(tx.date)}</span>
+                    <span>Balance {inr(balance)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Card className="hidden md:flex">
               <CardContent className="p-0">
                 <Table>
                   <TableHeader>
@@ -162,7 +186,7 @@ function Content() {
                   </TableHeader>
                   <TableBody>
                     <TableRow>
-                      <TableCell colSpan={4} className="text-slate-500">Opening balance</TableCell>
+                      <TableCell colSpan={4} className="text-muted-foreground">Opening balance</TableCell>
                       <TableCell className="text-right">{inr(selected.openingBalance || 0)}</TableCell>
                     </TableRow>
                     {ledger.map(({ tx, delta, balance }, i) => (
@@ -170,12 +194,12 @@ function Content() {
                         <TableCell className="whitespace-nowrap">{formatDateIST(tx.date)}</TableCell>
                         <TableCell>
                           {KIND_LABELS[tx.kind]} · {tx.category}
-                          <p className="text-xs text-slate-500">
+                          <p className="text-xs text-muted-foreground">
                             {[tx.projectName, tx.personName, tx.description].filter(Boolean).join(" · ")}
                           </p>
                         </TableCell>
-                        <TableCell className="text-right text-emerald-600">{delta > 0 ? inr(delta) : ""}</TableCell>
-                        <TableCell className="text-right text-red-600">{delta < 0 ? inr(-delta) : ""}</TableCell>
+                        <TableCell className="text-right text-success">{delta > 0 ? inr(delta) : ""}</TableCell>
+                        <TableCell className="text-right text-destructive">{delta < 0 ? inr(-delta) : ""}</TableCell>
                         <TableCell className="text-right font-medium">{inr(balance)}</TableCell>
                       </TableRow>
                     ))}
@@ -183,10 +207,48 @@ function Content() {
                 </Table>
               </CardContent>
             </Card>
+            </>
           ) : allRows.length === 0 ? (
-            <Card><CardContent className="p-8 text-center text-sm text-slate-500">No entries yet.</CardContent></Card>
+            <EmptyState icon={BookOpen} title="No entries yet" hint="Add a transaction and it will appear here." />
           ) : (
-            <Card>
+            <>
+            <div className="flex flex-col gap-2 md:hidden">
+              {allRows.map((t) => (
+                <div key={t.id} className="rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{KIND_LABELS[t.kind]} · {t.category}</p>
+                      <p className="truncate text-xs text-muted-foreground">{[t.projectName, t.personName, t.description].filter(Boolean).join(" · ")}</p>
+                    </div>
+                    <p className={`shrink-0 font-semibold tabular-nums ${IN_KINDS.includes(t.kind) ? "text-success" : OUT_KINDS.includes(t.kind) ? "text-destructive" : "text-muted-foreground"}`}>
+                      {IN_KINDS.includes(t.kind) ? "+" : OUT_KINDS.includes(t.kind) ? "−" : ""}{inr(t.amount)}
+                    </p>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{formatDateIST(t.date)}</span>
+                    {needsAccount(t) ? (
+                      <button
+                        type="button"
+                        className="rounded bg-warning/15 px-1.5 py-0.5 font-medium text-warning"
+                        onClick={() => {
+                          setAssignTarget(t);
+                          setAssignAccount("");
+                        }}
+                      >
+                        Assign account
+                      </button>
+                    ) : (
+                      <span>{accountLabel(t)}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2 text-sm font-semibold">
+                <span>{allRows.length} entries</span>
+                <span className="tabular-nums"><span className="text-success">{inr(allIn)}</span> in · <span className="text-destructive">{inr(allOut)}</span> out</span>
+              </div>
+            </div>
+            <Card className="hidden md:flex">
               <CardContent className="p-0">
                 <Table>
                   <TableHeader>
@@ -202,11 +264,11 @@ function Content() {
                     {allRows.map((t) => (
                       <TableRow key={t.id}>
                         <TableCell className="whitespace-nowrap">{formatDateIST(t.date)}</TableCell>
-                        <TableCell className={`whitespace-nowrap ${t.kind !== "transfer" && !t.accountId && t.paidFrom !== "allowance" ? "text-amber-600" : ""}`}>
+                        <TableCell className={`whitespace-nowrap ${t.kind !== "transfer" && !t.accountId && t.paidFrom !== "allowance" ? "text-warning" : ""}`}>
                           {needsAccount(t) ? (
                             <button
                               type="button"
-                              className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-200"
+                              className="rounded bg-warning/15 px-1.5 py-0.5 text-xs font-medium text-warning hover:bg-warning/25"
                               onClick={() => {
                                 setAssignTarget(t);
                                 setAssignAccount("");
@@ -220,25 +282,26 @@ function Content() {
                         </TableCell>
                         <TableCell>
                           {KIND_LABELS[t.kind]} · {t.category}
-                          <p className="text-xs text-slate-500">
+                          <p className="text-xs text-muted-foreground">
                             {[t.projectName, t.personName, t.description].filter(Boolean).join(" · ")}
                           </p>
                         </TableCell>
-                        <TableCell className="text-right text-emerald-600">{IN_KINDS.includes(t.kind) ? inr(t.amount) : ""}</TableCell>
-                        <TableCell className="text-right text-red-600">
-                          {OUT_KINDS.includes(t.kind) ? inr(t.amount) : t.kind === "transfer" ? <span className="text-slate-500">{inr(t.amount)} moved</span> : ""}
+                        <TableCell className="text-right text-success">{IN_KINDS.includes(t.kind) ? inr(t.amount) : ""}</TableCell>
+                        <TableCell className="text-right text-destructive">
+                          {OUT_KINDS.includes(t.kind) ? inr(t.amount) : t.kind === "transfer" ? <span className="text-muted-foreground">{inr(t.amount)} moved</span> : ""}
                         </TableCell>
                       </TableRow>
                     ))}
-                    <TableRow className="bg-slate-50 font-semibold">
+                    <TableRow className="bg-muted/50 font-semibold">
                       <TableCell colSpan={3}>Total ({allRows.length} entries)</TableCell>
-                      <TableCell className="text-right text-emerald-600">{inr(allIn)}</TableCell>
-                      <TableCell className="text-right text-red-600">{inr(allOut)}</TableCell>
+                      <TableCell className="text-right text-success">{inr(allIn)}</TableCell>
+                      <TableCell className="text-right text-destructive">{inr(allOut)}</TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
               </CardContent>
             </Card>
+            </>
           )}
         </>
       )}
@@ -249,7 +312,7 @@ function Content() {
             <DialogTitle>Assign account — {assignTarget ? inr(assignTarget.amount) : ""}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted-foreground">
               {assignTarget?.kind === "income" ? "Which account did this payment land in?" : "Which account was this paid from?"}{" "}
               The balance updates immediately.
             </p>
@@ -283,7 +346,7 @@ function Content() {
             <div>
               <Label>Opening balance (₹)</Label>
               <Input type="number" value={form.openingBalance} onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))} />
-              <p className="mt-1 text-xs text-slate-500">Balance before the first transaction recorded here.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Balance before the first transaction recorded here.</p>
             </div>
             {editing !== "new" && (
               <label className="flex items-center gap-2 text-sm">

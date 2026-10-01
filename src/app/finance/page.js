@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Plus, BellRing, CalendarClock } from "lucide-react";
-import FinanceShell, { Stat, signTone } from "@/components/finance/FinanceShell";
+import { Plus, BellRing, CalendarClock, Wallet, Landmark, TrendingUp, TrendingDown, PiggyBank, FolderKanban, IndianRupee, Clock, Banknote, Receipt, Scale } from "lucide-react";
+import FinanceShell, { Stat, signTone, PageSkeleton } from "@/components/finance/FinanceShell";
 import TransactionDialog from "@/components/finance/TransactionDialog";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
@@ -21,7 +21,7 @@ const INACTIVE_PROJECT = ["Delivered", "Archived"];
 function Section({ title, children }) {
   return (
     <section className="mb-6">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">{title}</h2>
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
       {children}
     </section>
   );
@@ -98,75 +98,75 @@ function Content() {
       }
     >
       {data.loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={4} rows={4} />
       ) : (
         <>
           <Section title="Accounts">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
               {activeAccounts.map((a) => (
-                <Stat key={a.id} label={a.name} value={inr(data.balances[a.id] || 0)} tone={(data.balances[a.id] || 0) < 0 ? "negative" : "neutral"} />
+                <Stat key={a.id} icon={a.type === "cash" ? Wallet : Landmark} label={a.name} value={inr(data.balances[a.id] || 0)} tone={(data.balances[a.id] || 0) < 0 ? "negative" : "neutral"} />
               ))}
-              <Stat label="Total balance" value={inr(totalBalance)} tone={signTone(totalBalance)} />
+              <Stat icon={PiggyBank} label="Total balance" value={inr(totalBalance)} tone={signTone(totalBalance)} />
             </div>
           </Section>
 
           <Section title={`Business — ${monthLabel(ym)}`}>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Stat label="This month revenue" value={inr(m.revenue)} tone="positive" />
-              <Stat label="This month expense" value={inr(m.expense)} />
-              <Stat label="This month profit" value={inr(m.revenue - m.expense)} tone={signTone(m.revenue - m.expense)} />
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
+              <Stat icon={TrendingUp} label="Revenue" value={inr(m.revenue)} tone="positive" />
+              <Stat icon={TrendingDown} label="Expense" value={inr(m.expense)} />
+              <div className="col-span-2 sm:col-span-1"><Stat icon={Scale} label="Profit" value={inr(m.revenue - m.expense)} tone={signTone(m.revenue - m.expense)} /></div>
             </div>
           </Section>
 
           <Section title="Projects">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Active projects" value={String(m.active.length)} />
-              <Stat label="Project revenue" value={inr(m.projRevenue)} tone="positive" sub="Received, active projects" />
-              <Stat label="Project expense" value={inr(m.projExpense)} />
-              <Stat label="Project profit" value={inr(projProfit)} tone={signTone(projProfit)} />
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+              <Stat icon={FolderKanban} label="Active projects" value={String(m.active.length)} />
+              <Stat icon={IndianRupee} label="Revenue" value={inr(m.projRevenue)} tone="positive" sub="Received" />
+              <Stat icon={Receipt} label="Expense" value={inr(m.projExpense)} />
+              <Stat icon={Scale} label="Profit" value={inr(projProfit)} tone={signTone(projProfit)} />
             </div>
           </Section>
 
           <Section title="Payments">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Stat label="Client pending" value={inr(m.clientPending)} tone={m.clientPending ? "warning" : "neutral"} sub="Project value − received" />
-              <Stat label="Vendor / other pending" value={inr(m.vendorPending)} tone={m.vendorPending ? "warning" : "neutral"} sub="Unpaid expenses" />
-              <Stat label="Salary pending" value={inr(m.salaryPending)} tone={m.salaryPending ? "warning" : "neutral"} sub="Processed, not yet paid" />
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
+              <Stat icon={Clock} label="Client pending" value={inr(m.clientPending)} tone={m.clientPending ? "warning" : "neutral"} sub="Project value − received" />
+              <Stat icon={Receipt} label="Vendor / other pending" value={inr(m.vendorPending)} tone={m.vendorPending ? "warning" : "neutral"} sub="Unpaid expenses" />
+              <Stat icon={Banknote} label="Salary pending" value={inr(m.salaryPending)} tone={m.salaryPending ? "warning" : "neutral"} sub="Processed, not yet paid" />
             </div>
           </Section>
 
           <Section title="Upcoming">
             <Card>
-              <CardContent className="divide-y divide-slate-100 p-0 text-sm">
-                <div className="flex items-center justify-between gap-3 p-3">
-                  <span className="flex items-center gap-2"><CalendarClock className="h-4 w-4 text-slate-400" /> Salary — {monthLabel(ym)}</span>
-                  <span className="text-slate-600">
+              <CardContent className="divide-y divide-border p-0 text-sm">
+                <div className="flex flex-col gap-1 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                  <span className="flex items-center gap-2"><CalendarClock className="h-4 w-4 text-muted-foreground/60" /> Salary — {monthLabel(ym)}</span>
+                  <span className="text-muted-foreground">
                     {m.salaryRunDone ? "Paid" : `${inr(m.monthlyPayroll)} gross · `}
-                    {!m.salaryRunDone && <Link href="/finance/payroll" className="font-medium text-emerald-700 hover:underline">Run payroll</Link>}
+                    {!m.salaryRunDone && <Link href="/finance/payroll" className="font-medium text-success hover:underline">Run payroll</Link>}
                   </span>
                 </div>
                 {m.emis.length === 0 ? (
-                  <div className="p-3 text-slate-500">No EMIs due in the next 30 days.</div>
+                  <div className="p-3 text-muted-foreground">No EMIs due in the next 30 days.</div>
                 ) : (
                   m.emis.map(({ l, due }) => {
                     const d = daysUntil(due);
                     return (
-                      <div key={l.id} className="flex items-center justify-between gap-3 p-3">
-                        <span className="flex items-center gap-2"><BellRing className={`h-4 w-4 ${d <= EMI_REMINDER_DAYS ? "text-amber-500" : "text-slate-400"}`} /> EMI — {l.name}</span>
-                        <span className={d < 0 ? "font-medium text-red-600" : "text-slate-600"}>{inr(l.emi)} · {formatDateIST(due)}{d < 0 ? ` (${-d}d overdue)` : ` (in ${d}d)`}</span>
+                      <div key={l.id} className="flex flex-col gap-1 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                        <span className="flex items-center gap-2"><BellRing className={`h-4 w-4 ${d <= EMI_REMINDER_DAYS ? "text-warning" : "text-muted-foreground/60"}`} /> EMI — {l.name}</span>
+                        <span className={d < 0 ? "font-medium text-destructive" : "text-muted-foreground"}>{inr(l.emi)} · {formatDateIST(due)}{d < 0 ? ` (${-d}d overdue)` : ` (in ${d}d)`}</span>
                       </div>
                     );
                   })
                 )}
                 {m.increments.length === 0 ? (
-                  <div className="p-3 text-slate-500">No increments due in the next {INCREMENT_REMINDER_DAYS} days.</div>
+                  <div className="p-3 text-muted-foreground">No increments due in the next {INCREMENT_REMINDER_DAYS} days.</div>
                 ) : (
                   m.increments.map(({ e, due }) => {
                     const d = daysUntil(due);
                     return (
-                      <div key={e.uid} className="flex items-center justify-between gap-3 p-3">
-                        <span className="flex items-center gap-2"><BellRing className="h-4 w-4 text-amber-500" /> Increment — {e.name}</span>
-                        <span className={d < 0 ? "font-medium text-red-600" : "text-slate-600"}>{formatDateIST(due)}{d < 0 ? ` (${-d}d overdue)` : d === 0 ? " (today)" : ` (in ${d}d)`}</span>
+                      <div key={e.uid} className="flex flex-col gap-1 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                        <span className="flex items-center gap-2"><BellRing className="h-4 w-4 text-warning" /> Increment — {e.name}</span>
+                        <span className={d < 0 ? "font-medium text-destructive" : "text-muted-foreground"}>{formatDateIST(due)}{d < 0 ? ` (${-d}d overdue)` : d === 0 ? " (today)" : ` (in ${d}d)`}</span>
                       </div>
                     );
                   })
@@ -176,14 +176,14 @@ function Content() {
           </Section>
 
           <Section title={`Company P&L — ${fyLabel(fy)}`}>
-            <div className="grid gap-3 sm:grid-cols-4">
-              <Stat label="Total revenue" value={inr(m.pnl.totalRevenue)} tone="positive" />
-              <Stat label="Total expenses" value={inr(m.pnl.totalExpenses)} />
-              <Stat label="Finance costs" value={inr(m.pnl.totalFinance)} sub="Loan interest" />
-              <Stat label={m.pnl.profit >= 0 ? "Company profit" : "Company loss"} value={inr(m.pnl.profit)} tone={signTone(m.pnl.profit)} />
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+              <Stat icon={TrendingUp} label="Total revenue" value={inr(m.pnl.totalRevenue)} tone="positive" />
+              <Stat icon={TrendingDown} label="Total expenses" value={inr(m.pnl.totalExpenses)} />
+              <Stat icon={Landmark} label="Finance costs" value={inr(m.pnl.totalFinance)} sub="Loan interest" />
+              <Stat icon={Scale} label={m.pnl.profit >= 0 ? "Company profit" : "Company loss"} value={inr(m.pnl.profit)} tone={signTone(m.pnl.profit)} />
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              Full breakdown in <Link href="/finance/reports" className="font-medium text-emerald-700 hover:underline">Reports → Company P&L</Link>.
+            <p className="mt-2 text-xs text-muted-foreground">
+              Full breakdown in <Link href="/finance/reports" className="font-medium text-success hover:underline">Reports → Company P&L</Link>.
             </p>
           </Section>
         </>

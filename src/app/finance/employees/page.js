@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { TrendingUp, IndianRupee, HandCoins, History, BellRing } from "lucide-react";
-import FinanceShell from "@/components/finance/FinanceShell";
+import FinanceShell, { PageSkeleton } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { saveSalaryStructure, applyIncrement, createEmployeeAdvance, advanceOutstanding } from "@/lib/firebase/payroll";
@@ -72,7 +72,7 @@ function Content() {
   return (
     <FinanceShell title="Employees — salary & advances" description="Salary structure, increments and staff advances/loans. Leave and LOP come automatically from Leave and Attendance.">
       {due.length > 0 && (
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">
           <BellRing className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <b>Increments coming up:</b>{" "}
@@ -91,9 +91,50 @@ function Content() {
       </div>
 
       {data.loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={0} rows={6} />
       ) : (
-        <Card>
+        <>
+          {/* Phone: one card per employee */}
+          <div className="flex flex-col gap-2 md:hidden">
+            {staff.map((e) => {
+              const f = data.employeeFinance[e.uid];
+              const d = daysUntil(f?.nextIncrementDate);
+              const soon = d != null && d <= INCREMENT_REMINDER_DAYS;
+              const owed = outstandingFor(e.uid);
+              return (
+                <div key={e.uid} className="rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{e.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">{e.employeeId} · {e.department}</p>
+                    </div>
+                    <p className="shrink-0 font-semibold tabular-nums">
+                      {f?.monthlySalary != null ? inr(f.monthlySalary) : <span className="text-sm font-normal text-muted-foreground">No salary</span>}
+                    </p>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <p className="text-muted-foreground">Next increment</p>
+                      <p className="font-medium">{formatDateIST(f?.nextIncrementDate)}</p>
+                      {soon && <p className="font-medium text-warning">{d < 0 ? "Overdue" : d === 0 ? "Today" : `In ${d} days`}</p>}
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <p className="text-muted-foreground">Advance / loan due</p>
+                      <p className={`font-medium ${owed ? "text-warning" : ""}`}>{owed ? inr(owed) : "—"}</p>
+                    </div>
+                  </div>
+                  <div className="mt-2 grid grid-cols-4 gap-1 border-t border-border pt-2">
+                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" onClick={() => open("salary", e)}><IndianRupee className="h-4 w-4" />Salary</Button>
+                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" disabled={!f?.monthlySalary} onClick={() => open("increment", e)}><TrendingUp className="h-4 w-4" />Raise</Button>
+                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" onClick={() => open("advance", e)}><HandCoins className="h-4 w-4" />Advance</Button>
+                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" onClick={() => open("history", e)}><History className="h-4 w-4" />History</Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <Card className="hidden md:flex">
           <CardContent className="p-0">
             <Table>
               <TableHeader>
@@ -116,15 +157,15 @@ function Content() {
                     <TableRow key={e.uid}>
                       <TableCell>
                         <p className="font-medium">{e.name}</p>
-                        <p className="text-xs text-slate-500">{e.employeeId} · {e.department}</p>
+                        <p className="text-xs text-muted-foreground">{e.employeeId} · {e.department}</p>
                       </TableCell>
-                      <TableCell className="text-right font-medium">{f?.monthlySalary != null ? inr(f.monthlySalary) : <span className="text-slate-400">Not set</span>}</TableCell>
+                      <TableCell className="text-right font-medium">{f?.monthlySalary != null ? inr(f.monthlySalary) : <span className="text-muted-foreground/60">Not set</span>}</TableCell>
                       <TableCell>{formatDateIST(f?.lastIncrementDate)}</TableCell>
                       <TableCell>
                         {formatDateIST(f?.nextIncrementDate)}
-                        {soon && <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">{d < 0 ? "OVERDUE" : `IN ${d}D`}</span>}
+                        {soon && <span className="ml-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">{d < 0 ? "OVERDUE" : `IN ${d}D`}</span>}
                       </TableCell>
-                      <TableCell className={`text-right ${owed ? "text-amber-600" : "text-slate-400"}`}>{owed ? inr(owed) : "—"}</TableCell>
+                      <TableCell className={`text-right ${owed ? "text-warning" : "text-muted-foreground/60"}`}>{owed ? inr(owed) : "—"}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
                           <Button size="icon-sm" variant="ghost" title="Salary" onClick={() => open("salary", e)}><IndianRupee className="h-3.5 w-3.5" /></Button>
@@ -139,7 +180,8 @@ function Content() {
               </TableBody>
             </Table>
           </CardContent>
-        </Card>
+          </Card>
+        </>
       )}
 
       <Dialog open={!!dlg} onOpenChange={(o) => !o && setDlg(null)}>
@@ -151,12 +193,12 @@ function Content() {
                 <div>
                   <Label>Monthly salary (₹)</Label>
                   <Input type="number" min="0" value={form.monthlySalary} onChange={(e) => setForm((f) => ({ ...f, monthlySalary: e.target.value }))} />
-                  <p className="mt-1 text-xs text-slate-500">To raise an existing salary use “Increment” so the history is kept.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">To raise an existing salary use “Increment” so the history is kept.</p>
                 </div>
                 <div>
                   <Label>Paid leaves per year</Label>
                   <Input type="number" min="0" value={form.annualPaidLeaves} onChange={(e) => setForm((f) => ({ ...f, annualPaidLeaves: e.target.value }))} />
-                  <p className="mt-1 text-xs text-slate-500">Leave beyond this in a calendar year becomes LOP in payroll.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Leave beyond this in a calendar year becomes LOP in payroll.</p>
                 </div>
                 <div>
                   <Label>Next increment date</Label>
@@ -170,10 +212,10 @@ function Content() {
             <>
               <DialogHeader><DialogTitle>Increment — {dlg.emp.name}</DialogTitle></DialogHeader>
               <div className="flex flex-col gap-3">
-                <p className="text-sm text-slate-600">Current salary: <b>{inr(data.employeeFinance[dlg.emp.uid]?.monthlySalary)}</b></p>
-                <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+                <p className="text-sm text-muted-foreground">Current salary: <b>{inr(data.employeeFinance[dlg.emp.uid]?.monthlySalary)}</b></p>
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
                   {[{ v: "amount", l: "₹ Amount" }, { v: "percent", l: "% Percent" }].map((o) => (
-                    <button key={o.v} type="button" onClick={() => setForm((f) => ({ ...f, mode: o.v }))} className={`rounded-md px-3 py-1.5 text-sm font-medium ${form.mode === o.v ? "bg-white shadow-sm" : "text-slate-500"}`}>{o.l}</button>
+                    <button key={o.v} type="button" onClick={() => setForm((f) => ({ ...f, mode: o.v }))} className={`rounded-md px-3 py-1.5 text-sm font-medium ${form.mode === o.v ? "bg-card shadow-sm" : "text-muted-foreground"}`}>{o.l}</button>
                   ))}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -202,9 +244,9 @@ function Content() {
             <>
               <DialogHeader><DialogTitle>Advance / loan — {dlg.emp.name}</DialogTitle></DialogHeader>
               <div className="flex flex-col gap-3">
-                <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
                   {[{ v: "salary_advance", l: "Salary advance" }, { v: "loan", l: "Staff loan" }].map((o) => (
-                    <button key={o.v} type="button" onClick={() => setForm((f) => ({ ...f, kind: o.v }))} className={`rounded-md px-3 py-1.5 text-sm font-medium ${form.kind === o.v ? "bg-white shadow-sm" : "text-slate-500"}`}>{o.l}</button>
+                    <button key={o.v} type="button" onClick={() => setForm((f) => ({ ...f, kind: o.v }))} className={`rounded-md px-3 py-1.5 text-sm font-medium ${form.kind === o.v ? "bg-card shadow-sm" : "text-muted-foreground"}`}>{o.l}</button>
                   ))}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -239,13 +281,13 @@ function Content() {
                 <div>
                   <p className="mb-1 font-medium">Increments</p>
                   {(data.employeeFinance[dlg.emp.uid]?.increments || []).length === 0 ? (
-                    <p className="text-slate-500">None recorded.</p>
+                    <p className="text-muted-foreground">None recorded.</p>
                   ) : (
-                    <ul className="divide-y divide-slate-100">
+                    <ul className="divide-y divide-border">
                       {[...data.employeeFinance[dlg.emp.uid].increments].reverse().map((i, idx) => (
                         <li key={idx} className="py-1.5">
                           {formatDateIST(i.date)} · {inr(i.oldSalary)} → <b>{inr(i.newSalary)}</b> (+{inr(i.amount)}, {i.percent}%)
-                          {i.note && <span className="text-slate-500"> — {i.note}</span>}
+                          {i.note && <span className="text-muted-foreground"> — {i.note}</span>}
                         </li>
                       ))}
                     </ul>
@@ -254,9 +296,9 @@ function Content() {
                 <div>
                   <p className="mb-1 font-medium">Advances & loans</p>
                   {data.advances.filter((a) => a.employeeUid === dlg.emp.uid).length === 0 ? (
-                    <p className="text-slate-500">None.</p>
+                    <p className="text-muted-foreground">None.</p>
                   ) : (
-                    <ul className="divide-y divide-slate-100">
+                    <ul className="divide-y divide-border">
                       {data.advances.filter((a) => a.employeeUid === dlg.emp.uid).map((a) => (
                         <li key={a.id} className="py-1.5">
                           {formatDateIST(a.date)} · {a.kind === "loan" ? "Loan" : "Advance"} {inr(a.amount)} · recovered {inr(a.recovered)} · <b>{inr(advanceOutstanding(a))} due</b>

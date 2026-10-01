@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Plus, Banknote } from "lucide-react";
-import FinanceShell, { Stat } from "@/components/finance/FinanceShell";
+import { Plus, Banknote, Landmark, CalendarClock, Building2 } from "lucide-react";
+import FinanceShell, { Stat, PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { createLoan, payEmi } from "@/lib/firebase/loans";
@@ -88,16 +88,16 @@ function Content() {
         </Button>
       }
     >
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <Stat label="Outstanding principal" value={inr(totalOutstanding)} tone={totalOutstanding ? "warning" : "neutral"} />
-        <Stat label="Monthly EMI" value={inr(monthlyEmi)} />
-        <Stat label="Active loans" value={String(active.length)} />
+      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
+        <div className="col-span-2 sm:col-span-1"><Stat icon={Landmark} label="Outstanding principal" value={inr(totalOutstanding)} tone={totalOutstanding ? "warning" : "neutral"} /></div>
+        <Stat icon={CalendarClock} label="Monthly EMI" value={inr(monthlyEmi)} />
+        <Stat icon={Building2} label="Active loans" value={String(active.length)} />
       </div>
 
       {data.loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={0} rows={3} />
       ) : data.loans.length === 0 ? (
-        <Card><CardContent className="p-8 text-center text-sm text-slate-500">No loans added yet.</CardContent></Card>
+        <EmptyState icon={Building2} title="No loans added yet" hint="Add a company loan to track EMIs, principal and interest." />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {data.loans.map((l) => {
@@ -110,29 +110,29 @@ function Content() {
                 <CardContent className="flex flex-col gap-3 p-4">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="font-medium text-slate-900">{l.name}</p>
-                      <p className="text-xs text-slate-500">{l.lender || "—"} · {l.interestRate}% p.a. · {l.tenureMonths || "—"} months</p>
+                      <p className="font-medium text-foreground">{l.name}</p>
+                      <p className="text-xs text-muted-foreground">{l.lender || "—"} · {l.interestRate}% p.a. · {l.tenureMonths || "—"} months</p>
                     </div>
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${l.status === "closed" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${l.status === "closed" ? "bg-success/10 text-success" : "bg-warning/15 text-warning"}`}>
                       {l.status === "closed" ? "Closed" : "Active"}
                     </span>
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-md bg-slate-50 p-2"><p className="text-[11px] uppercase text-slate-500">Loan</p><p className="font-semibold">{inr(l.amount)}</p></div>
-                    <div className="rounded-md bg-slate-50 p-2"><p className="text-[11px] uppercase text-slate-500">EMI</p><p className="font-semibold">{inr(l.emi)}</p></div>
-                    <div className="rounded-md bg-slate-50 p-2"><p className="text-[11px] uppercase text-slate-500">Outstanding</p><p className="font-semibold text-amber-600">{inr(l.outstanding)}</p></div>
+                    <div className="rounded-md bg-muted/50 p-2"><p className="text-[11px] uppercase text-muted-foreground">Loan</p><p className="font-semibold">{inr(l.amount)}</p></div>
+                    <div className="rounded-md bg-muted/50 p-2"><p className="text-[11px] uppercase text-muted-foreground">EMI</p><p className="font-semibold">{inr(l.emi)}</p></div>
+                    <div className="rounded-md bg-muted/50 p-2"><p className="text-[11px] uppercase text-muted-foreground">Outstanding</p><p className="font-semibold text-warning">{inr(l.outstanding)}</p></div>
                   </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} /></div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full bg-success" style={{ width: `${pct}%` }} /></div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                     <span>Principal paid {inr(l.totalPrincipalPaid)} · Interest paid {inr(l.totalInterestPaid)} · {l.paidCount || 0} EMIs</span>
                     {due && (
-                      <span className={d != null && d <= EMI_REMINDER_DAYS ? "font-medium text-amber-700" : ""}>
+                      <span className={d != null && d <= EMI_REMINDER_DAYS ? "font-medium text-warning" : ""}>
                         Next EMI {formatDateIST(due)}{d != null && d < 0 ? ` (${-d}d overdue)` : d != null && d <= EMI_REMINDER_DAYS ? ` (in ${d}d)` : ""}
                       </span>
                     )}
                   </div>
                   {emis.length > 0 && (
-                    <ul className="max-h-24 divide-y divide-slate-100 overflow-y-auto text-xs">
+                    <ul className="max-h-24 divide-y divide-border overflow-y-auto text-xs">
                       {emis.map((t) => (
                         <li key={t.id} className="flex justify-between py-1">
                           <span>{formatDateIST(t.date)}</span>
@@ -161,7 +161,7 @@ function Content() {
               <div><Label>Loan name</Label><Input value={form.name} onChange={(e) => patch({ name: e.target.value })} /></div>
               <div><Label>Lender</Label><Input value={form.lender} onChange={(e) => patch({ lender: e.target.value })} /></div>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div><Label>Amount (₹)</Label><Input type="number" min="0" value={form.amount} onChange={(e) => patch({ amount: e.target.value })} /></div>
               <div><Label>Interest % p.a.</Label><Input type="number" min="0" step="0.01" value={form.interestRate} onChange={(e) => patch({ interestRate: e.target.value })} /></div>
               <div><Label>Tenure (months)</Label><Input type="number" min="0" value={form.tenureMonths} onChange={(e) => patch({ tenureMonths: e.target.value })} /></div>
@@ -170,14 +170,14 @@ function Content() {
               <div>
                 <Label>EMI (₹)</Label>
                 <Input type="number" min="0" value={form.emi} onChange={(e) => setForm((f) => ({ ...f, emi: e.target.value, _emiTouched: true }))} />
-                <p className="mt-1 text-xs text-slate-500">Suggested from amount, rate and tenure — overwrite with the bank’s figure.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Suggested from amount, rate and tenure — overwrite with the bank’s figure.</p>
               </div>
               <div><Label>First EMI date</Label><Input type="date" value={form.startDate} onChange={(e) => patch({ startDate: e.target.value })} /></div>
             </div>
             <div>
               <Label>Loan amount received into (optional)</Label>
               <SearchableSelect value={form.disbursalAccountId} onValueChange={(v) => patch({ disbursalAccountId: v })} options={[{ value: "", label: "Don't record receipt" }, ...accountOptions]} placeholder="Don't record receipt" />
-              <p className="mt-1 text-xs text-slate-500">Raises that account’s balance. Not counted as income.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Raises that account’s balance. Not counted as income.</p>
             </div>
             <Button onClick={handleCreate} disabled={busy}>{busy ? "Saving..." : "Add loan"}</Button>
           </div>
@@ -189,10 +189,10 @@ function Content() {
           <DialogHeader><DialogTitle>Pay EMI — {pay?.name}</DialogTitle></DialogHeader>
           {pay && split && (
             <div className="flex flex-col gap-3">
-              <div className="rounded-md bg-slate-50 p-3 text-sm">
+              <div className="rounded-md bg-muted/50 p-3 text-sm">
                 <div className="flex justify-between"><span>Principal</span><b>{inr(split.principal)}</b></div>
                 <div className="flex justify-between"><span>Interest</span><b>{inr(split.interest)}</b></div>
-                <div className="mt-1 flex justify-between border-t border-slate-200 pt-1"><span>Total from account</span><b>{inr(split.total)}</b></div>
+                <div className="mt-1 flex justify-between border-t border-border pt-1"><span>Total from account</span><b>{inr(split.total)}</b></div>
               </div>
               <div><Label>Pay from account</Label><SearchableSelect value={payForm.accountId} onValueChange={(v) => setPayForm((f) => ({ ...f, accountId: v }))} options={accountOptions} placeholder="Select account..." /></div>
               <div><Label>Payment date</Label><Input type="date" value={payForm.date} onChange={(e) => setPayForm((f) => ({ ...f, date: e.target.value }))} /></div>

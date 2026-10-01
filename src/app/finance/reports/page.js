@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { FileSpreadsheet, FileText } from "lucide-react";
-import FinanceShell from "@/components/finance/FinanceShell";
+import { FileSpreadsheet, FileText, BarChart3 } from "lucide-react";
+import FinanceShell, { PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { REPORTS, buildReport } from "@/lib/finance/reports";
 import { downloadReportPdf, downloadReportXlsx } from "@/lib/finance/export";
@@ -128,15 +128,15 @@ function Content() {
       </Card>
 
       {!report ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <PageSkeleton stats={0} rows={5} />
       ) : (
         <>
           <div className="mb-2">
-            <h2 className="font-heading text-lg font-semibold text-slate-900">{report.title}</h2>
-            <p className="text-xs text-slate-500">{report.subtitle}</p>
+            <h2 className="font-heading text-lg font-semibold text-foreground">{report.title}</h2>
+            <p className="text-xs text-muted-foreground">{report.subtitle}</p>
           </div>
           {report.rows.length === 0 ? (
-            <Card><CardContent className="p-8 text-center text-sm text-slate-500">No data for these filters.</CardContent></Card>
+            <EmptyState icon={BarChart3} title="No data for these filters" hint="Try a wider period or clear a filter." />
           ) : (
             <Card>
               <CardContent className="p-0">
@@ -150,14 +150,14 @@ function Content() {
                   </TableHeader>
                   <TableBody>
                     {report.rows.map((r, i) => (
-                      <TableRow key={i} className={r.amount === null && r.particulars ? "bg-slate-50 font-semibold" : ""}>
+                      <TableRow key={i} className={r.amount === null && r.particulars ? "bg-muted/50 font-semibold" : ""}>
                         {report.columns.map((c) => (
                           <TableCell key={c.key} className={c.money ? "whitespace-nowrap text-right" : ""}>{fmt(c, r[c.key])}</TableCell>
                         ))}
                       </TableRow>
                     ))}
                     {report.totals && (
-                      <TableRow className="bg-slate-50 font-semibold">
+                      <TableRow className="bg-muted/50 font-semibold">
                         {report.columns.map((c, i) => (
                           <TableCell key={c.key} className={c.money ? "text-right" : ""}>
                             {report.totals[c.key] != null ? fmt(c, report.totals[c.key]) : i === 0 ? "Total" : ""}
