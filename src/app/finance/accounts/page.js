@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Plus, Pencil, Landmark, Wallet } from "lucide-react";
 import FinanceShell, { Stat, signTone } from "@/components/finance/FinanceShell";
 import useFinanceData from "@/lib/finance/useFinanceData";
-import { createAccount, updateAccount } from "@/lib/firebase/finance";
+import { createAccount, updateAccount, setLegacyAccount } from "@/lib/firebase/finance";
 import { accountLedger } from "@/lib/finance/ledger";
 import { inr } from "@/lib/finance/calc";
 import { KIND_LABELS } from "@/lib/finance/constants";
@@ -26,6 +26,8 @@ function Content() {
   const [editing, setEditing] = useState(null); // null | "new" | account
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [assignTarget, setAssignTarget] = useState(null);
+  const [assignAccount, setAssignAccount] = useState("");
 
   // No selection = the full ledger (every entry, all accounts). Clicking an
   // account card narrows it to that account, with a running balance.
@@ -49,6 +51,20 @@ function Content() {
     return t.accountId ? accountName(t.accountId) : "No account";
   }
   const total = data.accounts.filter((a) => a.active !== false).reduce((s, a) => s + (data.balances[a.id] || 0), 0);
+
+  // Older project-page invoices / expenses have no account until one is assigned.
+  const needsAccount = (t) => t.legacy && !t.accountId;
+
+  async function handleAssign() {
+    try {
+      await setLegacyAccount(assignTarget.id, assignAccount);
+      toast.success("Account assigned — balance updated");
+      setAssignTarget(null);
+      data.reload();
+    } catch (err) {
+      toast.error(err.message || "Could not assign account");
+    }
+  }
 
   function openEditor(acc) {
     setEditing(acc || "new");
@@ -187,7 +203,20 @@ function Content() {
                       <TableRow key={t.id}>
                         <TableCell className="whitespace-nowrap">{formatDateIST(t.date)}</TableCell>
                         <TableCell className={`whitespace-nowrap ${t.kind !== "transfer" && !t.accountId && t.paidFrom !== "allowance" ? "text-amber-600" : ""}`}>
-                          {accountLabel(t)}
+                          {needsAccount(t) ? (
+                            <button
+                              type="button"
+                              className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-200"
+                              onClick={() => {
+                                setAssignTarget(t);
+                                setAssignAccount("");
+                              }}
+                            >
+                              Assign account
+                            </button>
+                          ) : (
+                            accountLabel(t)
+                          )}
                         </TableCell>
                         <TableCell>
                           {KIND_LABELS[t.kind]} · {t.category}
@@ -213,6 +242,27 @@ function Content() {
           )}
         </>
       )}
+
+      <Dialog open={!!assignTarget} onOpenChange={(o) => !o && setAssignTarget(null)}>
+        <DialogContent className="w-[95vw] max-w-sm sm:w-full">
+          <DialogHeader>
+            <DialogTitle>Assign account — {assignTarget ? inr(assignTarget.amount) : ""}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-slate-600">
+              {assignTarget?.kind === "income" ? "Which account did this payment land in?" : "Which account was this paid from?"}{" "}
+              The balance updates immediately.
+            </p>
+            <SearchableSelect
+              value={assignAccount}
+              onValueChange={setAssignAccount}
+              options={data.accounts.filter((a) => a.active !== false).map((a) => ({ value: a.id, label: a.name, hint: inr(data.balances[a.id] || 0) }))}
+              placeholder="Select account..."
+            />
+            <Button onClick={handleAssign} disabled={!assignAccount}>Save</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="w-[95vw] max-w-sm sm:w-full">
