@@ -6,6 +6,7 @@ import { ensureDefaultAccounts, getAllFinanceRows, getFinanceCategories, getAllo
 import { getAllProjects } from "@/lib/firebase/projects";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
+import { getAllEvents } from "@/lib/firebase/events";
 import { getLoans } from "@/lib/firebase/loans";
 import { getAllPayrolls, getAllEmployeeFinance, getEmployeeAdvances } from "@/lib/firebase/payroll";
 import { computeBalances } from "./calc";
@@ -32,6 +33,7 @@ export default function useFinanceData() {
     projects: [],
     employees: [],
     freelancers: [],
+    events: [],
     allowances: [],
     loans: [],
     payrolls: [],
@@ -55,13 +57,14 @@ export default function useFinanceData() {
           failed.push(name);
           return fallback;
         });
-      const [accounts, rows, projects, employees, freelancers, allowances, loans, payrolls, employeeFinance, advances, cats] =
+      const [accounts, rows, projects, employees, freelancers, events, allowances, loans, payrolls, employeeFinance, advances, cats] =
         await Promise.all([
           safe("accounts", ensureDefaultAccounts(), []),
           safe("transactions", getAllFinanceRows(), { ledger: [], all: [] }),
           safe("projects", getAllProjects(), []),
           safe("employees", getAllEmployees(), []),
           safe("freelancers", getAllFreelancers(), []),
+          safe("events", getAllEvents(), []),
           safe("allowances", getAllowances(), []),
           safe("loans", getLoans(), []),
           safe("payrolls", getAllPayrolls(), []),
@@ -82,6 +85,7 @@ export default function useFinanceData() {
         projects,
         employees,
         freelancers,
+        events,
         allowances,
         loans,
         payrolls,

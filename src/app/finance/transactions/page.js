@@ -9,6 +9,8 @@ import CategoryManager from "@/components/finance/CategoryManager";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { deleteTransaction, markPayablePaid } from "@/lib/firebase/finance";
+import { deleteExpense } from "@/lib/firebase/expenses";
+import { suggestedFreelancerPayouts } from "@/lib/finance/payouts";
 import { filterTransactions, inr } from "@/lib/finance/calc";
 import { KIND_LABELS } from "@/lib/finance/constants";
 import { formatDateIST } from "@/lib/dateIST";
@@ -63,6 +65,11 @@ function Content() {
     return [...list].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [data.all, filters]);
 
+  const payouts = useMemo(
+    () => suggestedFreelancerPayouts(data.events, data.freelancers, data.all),
+    [data.events, data.freelancers, data.all]
+  );
+
   const totalIn = rows.filter((t) => t.kind === "income").reduce((s, t) => s + t.amount, 0);
   const totalOut = rows.filter((t) => t.kind === "expense").reduce((s, t) => s + t.amount, 0);
 
@@ -74,7 +81,8 @@ function Content() {
   async function handleDelete(tx) {
     if (!window.confirm("Delete this transaction? Balances and P&L will update.")) return;
     try {
-      await deleteTransaction(tx.id);
+      if (tx.legacy) await deleteExpense(tx.id.replace("legacy-exp-", ""));
+      else await deleteTransaction(tx.id);
       toast.success("Transaction deleted");
       data.reload();
     } catch (err) {
@@ -110,6 +118,49 @@ function Content() {
         </>
       }
     >
+      {payouts.length > 0 && (
+        <Card className="mb-4 border-amber-200 bg-amber-50/50">
+          <CardContent className="p-4">
+            <p className="mb-2 text-sm font-medium text-slate-900">Freelancer payouts due ({payouts.length})</p>
+            <div className="flex flex-col gap-2">
+              {payouts.map((s) => (
+                <div key={s.key} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white p-2 text-sm">
+                  <span>
+                    <span className="font-medium">{s.personName}</span>{" "}
+                    <span className="text-slate-500">
+                      · {s.projectName} · {s.days} day{s.days > 1 ? "s" : ""} @ {inr(s.dayRate)} · <b>{inr(s.amount)}</b> due
+                      {s.alreadyPaid > 0 && ` (${inr(s.alreadyPaid)} already paid)`}
+                    </span>
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setDialog({
+                        open: true,
+                        initial: {
+                          kind: "expense",
+                          projectId: s.projectId,
+                          personUid: s.personUid,
+                          personType: "freelancer",
+                          category: "Freelancer",
+                          amount: s.amount,
+                          description: s.alreadyPaid
+                            ? `Additional payout · ${s.days} total days (${inr(s.alreadyPaid)} already paid)`
+                            : `${s.days} shoot day${s.days > 1 ? "s" : ""} @ ${inr(s.dayRate)}/day`,
+                        },
+                      })
+                    }
+                  >
+                    Pay
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="mb-4">
         <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
@@ -189,7 +240,10 @@ function Content() {
               </TableHeader>
               <TableBody>
                 {rows.map((t) => {
-                  const locked = t.legacy || (t.source && t.source !== "manual");
+                  // Rows made by salary / EMI / allowance flows are edited there. Older
+                  // project-page expenses can be deleted here (not edited); their invoices can't.
+                  const locked = t.legacy ? !t.id.startsWith("legacy-exp-") : t.source && t.source !== "manual";
+                  const deleteOnly = t.legacy && t.id.startsWith("legacy-exp-");
                   return (
                     <TableRow key={t.id}>
                       <TableCell className="whitespace-nowrap">{formatDateIST(t.date)}</TableCell>
@@ -249,6 +303,11 @@ function Content() {
                                 <Trash2 className="h-3.5 w-3.5 text-red-600" />
                               </Button>
                             </>
+                          )}
+                          {deleteOnly && (
+                            <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(t)}>
+                              <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                            </Button>
                           )}
                         </div>
                       </TableCell>
