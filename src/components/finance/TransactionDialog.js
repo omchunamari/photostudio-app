@@ -48,8 +48,8 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
 
   useEffect(() => {
     if (!open) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (initial) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         ...blank(initial.kind || "expense"),
         kind: initial.kind || "expense",
