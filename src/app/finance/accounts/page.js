@@ -27,8 +27,27 @@ function Content() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
 
-  const selected = data.accounts.find((a) => a.id === selectedId) || data.accounts[0];
+  // No selection = the full ledger (every entry, all accounts). Clicking an
+  // account card narrows it to that account, with a running balance.
+  const selected = data.accounts.find((a) => a.id === selectedId) || null;
   const ledger = useMemo(() => (selected ? accountLedger(selected, data.all) : []), [selected, data.all]);
+  const accountName = (id) => data.accounts.find((a) => a.id === id)?.name || "";
+
+  const allRows = useMemo(
+    () => [...data.all].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || "").localeCompare(a.createdAt || "")),
+    [data.all]
+  );
+  const IN_KINDS = ["income", "advance_return", "loan_in"];
+  const OUT_KINDS = ["expense", "advance"];
+  const allIn = allRows.filter((t) => IN_KINDS.includes(t.kind)).reduce((s, t) => s + t.amount, 0);
+  const allOut = allRows.filter((t) => OUT_KINDS.includes(t.kind)).reduce((s, t) => s + t.amount, 0);
+
+  function accountLabel(t) {
+    if (t.kind === "transfer") return `${accountName(t.accountId)} → ${accountName(t.toAccountId)}`;
+    if (t.paidFrom === "allowance") return "From allowance";
+    if (t.status === "pending") return "Unpaid";
+    return t.accountId ? accountName(t.accountId) : "No account";
+  }
   const total = data.accounts.filter((a) => a.active !== false).reduce((s, a) => s + (data.balances[a.id] || 0), 0);
 
   function openEditor(acc) {
@@ -70,7 +89,7 @@ function Content() {
               <button
                 key={a.id}
                 type="button"
-                onClick={() => setSelectedId(a.id)}
+                onClick={() => setSelectedId(selected?.id === a.id ? "" : a.id)}
                 className={`rounded-lg border bg-white p-4 text-left transition-colors ${
                   selected?.id === a.id ? "border-emerald-500 ring-1 ring-emerald-500" : "border-slate-200 hover:border-slate-300"
                 } ${a.active === false ? "opacity-60" : ""}`}
@@ -99,45 +118,98 @@ function Content() {
             <Stat label="Total balance" value={inr(total)} tone={signTone(total)} sub="Active accounts" />
           </div>
 
-          {selected && (
-            <>
-              <h2 className="mb-2 font-heading text-lg font-semibold text-slate-900">{selected.name} — ledger</h2>
-              <Card>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Details</TableHead>
-                        <TableHead className="text-right">In</TableHead>
-                        <TableHead className="text-right">Out</TableHead>
-                        <TableHead className="text-right">Balance</TableHead>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-heading text-lg font-semibold text-slate-900">
+              {selected ? `${selected.name} — ledger` : "All entries"}
+            </h2>
+            {selected ? (
+              <Button size="sm" variant="outline" onClick={() => setSelectedId("")}>
+                Show all accounts
+              </Button>
+            ) : (
+              <p className="text-xs text-slate-500">Click an account above to filter to just that account.</p>
+            )}
+          </div>
+
+          {selected ? (
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Details</TableHead>
+                      <TableHead className="text-right">In</TableHead>
+                      <TableHead className="text-right">Out</TableHead>
+                      <TableHead className="text-right">Balance</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-slate-500">Opening balance</TableCell>
+                      <TableCell className="text-right">{inr(selected.openingBalance || 0)}</TableCell>
+                    </TableRow>
+                    {ledger.map(({ tx, delta, balance }, i) => (
+                      <TableRow key={`${tx.id}-${i}`}>
+                        <TableCell className="whitespace-nowrap">{formatDateIST(tx.date)}</TableCell>
+                        <TableCell>
+                          {KIND_LABELS[tx.kind]} · {tx.category}
+                          <p className="text-xs text-slate-500">
+                            {[tx.projectName, tx.personName, tx.description].filter(Boolean).join(" · ")}
+                          </p>
+                        </TableCell>
+                        <TableCell className="text-right text-emerald-600">{delta > 0 ? inr(delta) : ""}</TableCell>
+                        <TableCell className="text-right text-red-600">{delta < 0 ? inr(-delta) : ""}</TableCell>
+                        <TableCell className="text-right font-medium">{inr(balance)}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-slate-500">Opening balance</TableCell>
-                        <TableCell className="text-right">{inr(selected.openingBalance || 0)}</TableCell>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ) : allRows.length === 0 ? (
+            <Card><CardContent className="p-8 text-center text-sm text-slate-500">No entries yet.</CardContent></Card>
+          ) : (
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Account</TableHead>
+                      <TableHead>Details</TableHead>
+                      <TableHead className="text-right">In</TableHead>
+                      <TableHead className="text-right">Out</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {allRows.map((t) => (
+                      <TableRow key={t.id}>
+                        <TableCell className="whitespace-nowrap">{formatDateIST(t.date)}</TableCell>
+                        <TableCell className={`whitespace-nowrap ${t.kind !== "transfer" && !t.accountId && t.paidFrom !== "allowance" ? "text-amber-600" : ""}`}>
+                          {accountLabel(t)}
+                        </TableCell>
+                        <TableCell>
+                          {KIND_LABELS[t.kind]} · {t.category}
+                          <p className="text-xs text-slate-500">
+                            {[t.projectName, t.personName, t.description].filter(Boolean).join(" · ")}
+                          </p>
+                        </TableCell>
+                        <TableCell className="text-right text-emerald-600">{IN_KINDS.includes(t.kind) ? inr(t.amount) : ""}</TableCell>
+                        <TableCell className="text-right text-red-600">
+                          {OUT_KINDS.includes(t.kind) ? inr(t.amount) : t.kind === "transfer" ? <span className="text-slate-500">{inr(t.amount)} moved</span> : ""}
+                        </TableCell>
                       </TableRow>
-                      {ledger.map(({ tx, delta, balance }, i) => (
-                        <TableRow key={`${tx.id}-${i}`}>
-                          <TableCell className="whitespace-nowrap">{formatDateIST(tx.date)}</TableCell>
-                          <TableCell>
-                            {KIND_LABELS[tx.kind]} · {tx.category}
-                            <p className="text-xs text-slate-500">
-                              {[tx.projectName, tx.personName, tx.description].filter(Boolean).join(" · ")}
-                            </p>
-                          </TableCell>
-                          <TableCell className="text-right text-emerald-600">{delta > 0 ? inr(delta) : ""}</TableCell>
-                          <TableCell className="text-right text-red-600">{delta < 0 ? inr(-delta) : ""}</TableCell>
-                          <TableCell className="text-right font-medium">{inr(balance)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </>
+                    ))}
+                    <TableRow className="bg-slate-50 font-semibold">
+                      <TableCell colSpan={3}>Total ({allRows.length} entries)</TableCell>
+                      <TableCell className="text-right text-emerald-600">{inr(allIn)}</TableCell>
+                      <TableCell className="text-right text-red-600">{inr(allOut)}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           )}
         </>
       )}
