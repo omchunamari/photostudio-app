@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Paperclip, Tags, CheckCircle2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Tags, CheckCircle2 } from "lucide-react";
 import FinanceShell from "@/components/finance/FinanceShell";
 import TransactionDialog from "@/components/finance/TransactionDialog";
 import CategoryManager from "@/components/finance/CategoryManager";
@@ -306,11 +306,6 @@ function Content() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center justify-end gap-1">
-                          {t.attachmentUrl && (
-                            <a href={t.attachmentUrl} target="_blank" rel="noreferrer" title={t.attachmentName || "Attachment"}>
-                              <Paperclip className="h-3.5 w-3.5 text-slate-500" />
-                            </a>
-                          )}
                           {t.status === "pending" && !t.legacy && (
                             <Button
                               variant="ghost"

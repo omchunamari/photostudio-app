@@ -11,8 +11,7 @@ import {
   orderBy,
   where,
 } from "firebase/firestore";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db, storage } from "./client";
+import { db } from "./client";
 import {
   DEFAULT_ACCOUNTS,
   DEFAULT_PROJECT_EXPENSE_CATEGORIES,
@@ -45,7 +44,6 @@ import { legacyToTransactions } from "@/lib/finance/calc";
  *   accountId, toAccountId,           // toAccountId for transfers only
  *   projectId, projectName,
  *   personUid, personName, personType ("employee"|"freelancer"|"vendor"|null),
- *   attachmentUrl, attachmentName,
  *   source: "manual"|"salary"|"emi"|"allowance"|"employee_advance"|"loan",
  *   paidFrom: "account"|"allowance",  // spends out of an allowance touch no account
  *   allowanceId, payrollId, loanId, advanceId,
@@ -172,8 +170,6 @@ function buildTx(data, by) {
     personUid: data.personUid || null,
     personName: data.personName || null,
     personType: data.personType || null,
-    attachmentUrl: data.attachmentUrl || null,
-    attachmentName: data.attachmentName || null,
     source: data.source || "manual",
     paidFrom: fromAllowance ? "allowance" : "account",
     allowanceId: data.allowanceId || null,
@@ -232,15 +228,6 @@ export async function getTransactions() {
 export async function getAllFinanceRows() {
   const [txs, invoices, expenses] = await Promise.all([getTransactions(), getAllInvoices(), getAllExpenses()]);
   return { ledger: txs, all: [...txs, ...legacyToTransactions(invoices, expenses)] };
-}
-
-export async function uploadAttachment(file, folder = "misc") {
-  if (!file) return null;
-  if (file.size > 10 * 1024 * 1024) throw new Error("Attachment must be under 10 MB");
-  const safe = file.name.replace(/[^\w.\-]+/g, "_");
-  const r = storageRef(storage, `finance/${folder}/${Date.now()}_${safe}`);
-  await uploadBytes(r, file);
-  return { url: await getDownloadURL(r), name: file.name };
 }
 
 /** Links an older project-page invoice/expense to a Cash/Bank account so it moves that balance. */

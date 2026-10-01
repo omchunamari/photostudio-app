@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Paperclip } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import SearchableSelect from "@/components/ui/searchable-select";
-import { createTransaction, updateTransaction, uploadAttachment } from "@/lib/firebase/finance";
+import { createTransaction, updateTransaction } from "@/lib/firebase/finance";
 import { buildPersonOptions, resolvePerson, personKeyOf } from "@/lib/finance/people";
 import { getISTDateStr } from "@/lib/dateIST";
 import { CAT_PROJECT_PAYMENT } from "@/lib/finance/constants";
@@ -45,13 +44,11 @@ const blank = (kind = "expense") => ({
 export default function TransactionDialog({ open, onOpenChange, data, initial, user, onSaved }) {
   const editing = !!initial?.id;
   const [form, setForm] = useState(blank());
-  const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setFile(null);
     if (initial) {
       setForm({
         ...blank(initial.kind || "expense"),
@@ -106,8 +103,6 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
 
     setSaving(true);
     try {
-      let attachment = null;
-      if (file) attachment = await uploadAttachment(file, "transactions");
       const project = data.projects.find((p) => p.id === form.projectId);
       const usesProject = form.kind !== "transfer" && (form.scope === "project" || fromAllowance) && form.projectId;
       const payload = {
@@ -130,8 +125,6 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
         status: form.kind === "expense" && form.pending ? "pending" : "paid",
         paidFrom: fromAllowance ? "allowance" : "account",
         allowanceId: initial?.allowanceId || null,
-        attachmentUrl: attachment?.url || initial?.attachmentUrl || null,
-        attachmentName: attachment?.name || initial?.attachmentName || null,
         source: initial?.source || "manual",
       };
       if (editing) await updateTransaction(initial.id, payload, user);
@@ -299,15 +292,6 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
           <div>
             <Label>Description</Label>
             <Textarea rows={2} value={form.description} onChange={(e) => set({ description: e.target.value })} />
-          </div>
-
-          <div>
-            <Label>Bill / attachment (optional)</Label>
-            <label className="mt-1 flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">
-              <Paperclip className="h-4 w-4" />
-              <span className="truncate">{file?.name || initial?.attachmentName || "Choose file (image or PDF, max 10 MB)"}</span>
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            </label>
           </div>
 
           <Button onClick={handleSave} disabled={saving}>
