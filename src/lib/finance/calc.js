@@ -33,7 +33,8 @@ export function inrPlain(n) {
 // Before the Finance module, project money lived in `invoices` (paid =
 // received) and `expenses`. Those collections stay untouched; here they are
 // re-shaped into ledger-style rows so every report / P&L sees ONE stream.
-// Legacy rows have no account, so they never move an account balance.
+// Legacy rows move an account balance only once an account has been assigned
+// to them (on the project page, or via "Assign account" in Finance).
 // ---------------------------------------------------------------------
 export function legacyToTransactions(invoices = [], expenses = []) {
   const rows = [];
@@ -46,7 +47,7 @@ export function legacyToTransactions(invoices = [], expenses = []) {
       scope: "project",
       status: "paid",
       date: collectionDate(inv),
-      accountId: null,
+      accountId: inv.accountId || null,
       amount: Number(inv.amount) || 0,
       category: "Project Payment",
       projectId: inv.projectId,
@@ -62,7 +63,7 @@ export function legacyToTransactions(invoices = [], expenses = []) {
       scope: "project",
       status: "paid",
       date: e.date,
-      accountId: null,
+      accountId: e.accountId || null,
       amount: Number(e.amount) || 0,
       category: e.category || (e.type === "freelancer_payout" ? "Freelancer" : e.type === "advance" ? "Advance" : "Miscellaneous"),
       projectId: e.projectId,
@@ -84,7 +85,7 @@ export function legacyToTransactions(invoices = [], expenses = []) {
 /** [{accountId, delta}] — how a transaction moves account balances. */
 export function accountEffects(tx) {
   const amt = Number(tx.amount) || 0;
-  if (tx.legacy || !amt) return [];
+  if (!amt) return [];
   // Pending payables and spends paid out of an employee's allowance don't
   // touch an account (the allowance advance already did).
   if (tx.status === "pending" || tx.paidFrom === "allowance") return [];

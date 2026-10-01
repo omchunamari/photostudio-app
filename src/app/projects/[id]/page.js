@@ -50,7 +50,7 @@ import {
   addCustomExpenseCategory,
   removeCustomExpenseCategory,
 } from "@/lib/firebase/expenses";
-import { getTransactionsForProject } from "@/lib/firebase/finance";
+import { getTransactionsForProject, getAccounts } from "@/lib/firebase/finance";
 import { plExpense, plIncome } from "@/lib/finance/calc";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
 import { PROJECT_TYPES } from "@/lib/constants/leads";
@@ -274,6 +274,9 @@ function ProjectDetailContent() {
   // Finance-module ledger rows for this project (income / expenses entered in
   // Finance). Only loaded for roles the ledger rules allow.
   const [ledgerTxs, setLedgerTxs] = useState([]);
+  // Cash / bank accounts, so money entered here can be tied to the account it
+  // moved through (admin / super_admin only — same boundary as the ledger).
+  const [financeAccounts, setFinanceAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -307,6 +310,7 @@ function ProjectDetailContent() {
     date: new Date().toISOString().slice(0, 10),
     amount: "",
     status: "unpaid",
+    accountId: "",
     note: "",
   });
 
@@ -318,6 +322,7 @@ function ProjectDetailContent() {
     category: MANUAL_EXPENSE_CATEGORIES[0],
     amount: "",
     description: "",
+    accountId: "",
     date: new Date().toISOString().slice(0, 10),
   });
 
@@ -380,6 +385,7 @@ function ProjectDetailContent() {
         if (["super_admin", "admin"].includes(user.role)) {
           try {
             setLedgerTxs(await getTransactionsForProject(id));
+            setFinanceAccounts((await getAccounts()).filter((a) => a.active !== false));
           } catch (err) {
             console.error("Finance ledger unavailable:", err);
           }
@@ -694,6 +700,7 @@ function ProjectDetailContent() {
           date: invoiceForm.date,
           amount: invoiceForm.amount,
           status: invoiceForm.status,
+          accountId: invoiceForm.status === "paid" ? invoiceForm.accountId || null : null,
           note: invoiceForm.note,
         },
         user.uid,
@@ -752,6 +759,7 @@ function ProjectDetailContent() {
           category: expenseForm.category,
           amount: expenseForm.amount,
           description: expenseForm.description,
+          accountId: expenseForm.accountId || null,
           date: expenseForm.date,
         },
         user.uid,
@@ -763,6 +771,7 @@ function ProjectDetailContent() {
         category: MANUAL_EXPENSE_CATEGORIES[0],
         amount: "",
         description: "",
+        accountId: "",
         date: new Date().toISOString().slice(0, 10),
       });
       loadData();
@@ -1239,6 +1248,18 @@ function ProjectDetailContent() {
                             </Select>
                           </div>
                         </div>
+                        {financeAccounts.length > 0 && invoiceForm.status === "paid" && (
+                          <div>
+                            <Label>Received into account</Label>
+                            <SearchableSelect
+                              value={invoiceForm.accountId}
+                              onValueChange={(v) => setInvoiceForm((p) => ({ ...p, accountId: v }))}
+                              options={financeAccounts.map((a) => ({ value: a.id, label: a.name }))}
+                              placeholder="Select account..."
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Optional — lets this move that account&apos;s balance. Can be set later in Finance.</p>
+                          </div>
+                        )}
                         <div>
                           <Label htmlFor="invoiceNote">Note (optional)</Label>
                           <Textarea
@@ -1695,6 +1716,18 @@ function ProjectDetailContent() {
                             required
                           />
                         </div>
+                        {financeAccounts.length > 0 && true && (
+                          <div>
+                            <Label>Paid from account</Label>
+                            <SearchableSelect
+                              value={expenseForm.accountId}
+                              onValueChange={(v) => setExpenseForm((p) => ({ ...p, accountId: v }))}
+                              options={financeAccounts.map((a) => ({ value: a.id, label: a.name }))}
+                              placeholder="Select account..."
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Optional — lets this move that account&apos;s balance. Can be set later in Finance.</p>
+                          </div>
+                        )}
                         <div>
                           <Label htmlFor="expenseDescription">Description</Label>
                           <Textarea

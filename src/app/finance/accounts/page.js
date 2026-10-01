@@ -28,7 +28,7 @@ function Content() {
   const [saving, setSaving] = useState(false);
 
   const selected = data.accounts.find((a) => a.id === selectedId) || data.accounts[0];
-  const ledger = useMemo(() => (selected ? accountLedger(selected, data.ledger) : []), [selected, data.ledger]);
+  const ledger = useMemo(() => (selected ? accountLedger(selected, data.all) : []), [selected, data.all]);
   const total = data.accounts.filter((a) => a.active !== false).reduce((s, a) => s + (data.balances[a.id] || 0), 0);
 
   function openEditor(acc) {

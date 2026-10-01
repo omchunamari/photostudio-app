@@ -243,6 +243,14 @@ export async function uploadAttachment(file, folder = "misc") {
   return { url: await getDownloadURL(r), name: file.name };
 }
 
+/** Links an older project-page invoice/expense to a Cash/Bank account so it moves that balance. */
+export async function setLegacyAccount(legacyId, accountId) {
+  const isInvoice = legacyId.startsWith("legacy-inv-");
+  const col = isInvoice ? "invoices" : "expenses";
+  const id = legacyId.replace(/^legacy-(inv|exp)-/, "");
+  await updateDoc(doc(db, col, id), { accountId: accountId || null, updatedAt: now() });
+}
+
 // ------------------------------ Allowances ------------------------------
 /**
  * Giving an allowance is ONE write that (a) opens the allowance and (b) posts

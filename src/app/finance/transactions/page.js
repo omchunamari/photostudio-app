@@ -8,7 +8,7 @@ import TransactionDialog from "@/components/finance/TransactionDialog";
 import CategoryManager from "@/components/finance/CategoryManager";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
-import { deleteTransaction, markPayablePaid } from "@/lib/firebase/finance";
+import { deleteTransaction, markPayablePaid, setLegacyAccount } from "@/lib/firebase/finance";
 import { deleteExpense } from "@/lib/firebase/expenses";
 import { suggestedFreelancerPayouts } from "@/lib/finance/payouts";
 import { filterTransactions, inr } from "@/lib/finance/calc";
@@ -29,6 +29,7 @@ const KIND_FILTER = [
   { value: "transfer", label: "Transfer" },
   { value: "advance", label: "Advances" },
   { value: "pending", label: "Unpaid payables" },
+  { value: "noaccount", label: "Missing account" },
 ];
 
 const KIND_TONE = {
@@ -40,6 +41,9 @@ const KIND_TONE = {
   loan_in: "text-emerald-600",
 };
 
+// Older project-page invoices / expenses that were never tied to a Cash/Bank account.
+const needsAccount = (t) => t.legacy && !t.accountId;
+
 function Content() {
   const { user } = useAuth();
   const data = useFinanceData();
@@ -48,6 +52,8 @@ function Content() {
   const [catOpen, setCatOpen] = useState(false);
   const [payTarget, setPayTarget] = useState(null);
   const [payForm, setPayForm] = useState({ accountId: "", date: "" });
+  const [assignTarget, setAssignTarget] = useState(null);
+  const [assignAccount, setAssignAccount] = useState("");
 
   const accountName = (id) => data.accounts.find((a) => a.id === id)?.name || "—";
   const set = (p) => setFilters((f) => ({ ...f, ...p }));
@@ -55,6 +61,7 @@ function Content() {
   const rows = useMemo(() => {
     let list = filterTransactions(data.all, filters);
     if (filters.kind === "pending") list = list.filter((t) => t.status === "pending");
+    else if (filters.kind === "noaccount") list = list.filter(needsAccount);
     else if (filters.kind !== "all") list = list.filter((t) => t.kind === filters.kind);
     if (filters.q.trim()) {
       const q = filters.q.toLowerCase();
@@ -101,6 +108,18 @@ function Content() {
     }
   }
 
+  async function handleAssign() {
+    try {
+      await setLegacyAccount(assignTarget.id, assignAccount);
+      toast.success("Account assigned — balance updated");
+      setAssignTarget(null);
+      data.reload();
+    } catch (err) {
+      toast.error(err.message || "Could not assign account");
+    }
+  }
+
+  const missingAccount = data.all.filter(needsAccount).length;
   const accountOptions = data.accounts.filter((a) => a.active !== false).map((a) => ({ value: a.id, label: a.name }));
 
   return (
@@ -262,7 +281,18 @@ function Content() {
                         {t.payee && <p className="text-xs text-slate-500">Payee: {t.payee}</p>}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        {t.kind === "transfer"
+                        {needsAccount(t) ? (
+                          <button
+                            type="button"
+                            className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-200"
+                            onClick={() => {
+                              setAssignTarget(t);
+                              setAssignAccount("");
+                            }}
+                          >
+                            Assign account
+                          </button>
+                        ) : t.kind === "transfer"
                           ? `${accountName(t.accountId)} → ${accountName(t.toAccountId)}`
                           : t.paidFrom === "allowance"
                             ? "From allowance"
@@ -319,9 +349,14 @@ function Content() {
           </CardContent>
         </Card>
       )}
+      {missingAccount > 0 && filters.kind !== "noaccount" && (
+        <button type="button" onClick={() => set({ kind: "noaccount" })} className="mt-3 text-sm font-medium text-amber-700 hover:underline">
+          {missingAccount} older project-page entr{missingAccount === 1 ? "y has" : "ies have"} no Cash/Bank account — review them →
+        </button>
+      )}
       <p className="mt-2 text-xs text-slate-500">
         Salary, EMI, allowance and advance rows are created by their own screens and are edited there. Rows tagged
-        “Project page” come from invoices / expenses entered on a project page; they count in every P&L but have no account.
+        “Project page” come from invoices / expenses entered on a project page; they count in every P&L, and move a Cash/Bank balance once you assign an account.
       </p>
 
       <TransactionDialog
@@ -333,6 +368,22 @@ function Content() {
         onSaved={data.reload}
       />
       <CategoryManager open={catOpen} onOpenChange={setCatOpen} cats={data.cats} onSaved={data.reload} />
+
+      <Dialog open={!!assignTarget} onOpenChange={(o) => !o && setAssignTarget(null)}>
+        <DialogContent className="w-[95vw] max-w-sm sm:w-full">
+          <DialogHeader>
+            <DialogTitle>Assign account — {assignTarget ? inr(assignTarget.amount) : ""}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-slate-600">
+              {assignTarget?.kind === "income" ? "Which account did this payment land in?" : "Which account was this paid from?"}{" "}
+              The account balance updates immediately.
+            </p>
+            <SearchableSelect value={assignAccount} onValueChange={setAssignAccount} options={accountOptions} placeholder="Select account..." />
+            <Button onClick={handleAssign} disabled={!assignAccount}>Save</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!payTarget} onOpenChange={(o) => !o && setPayTarget(null)}>
         <DialogContent className="w-[95vw] max-w-sm sm:w-full">

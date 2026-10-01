@@ -112,7 +112,7 @@ export function buildReport(id, ctx, f) {
       const list = f.accountId ? accounts.filter((a) => a.id === f.accountId) : accounts;
       const rows = [];
       list.forEach((a) => {
-        const full = accountLedger(a, ledger);
+        const full = accountLedger(a, all);
         const before = full.filter((r) => f.from && r.tx.date < f.from);
         const opening = before.length ? before[before.length - 1].balance : f.from ? Number(a.openingBalance) || 0 : Number(a.openingBalance) || 0;
         rows.push({ date: "", account: a.name, details: "Opening balance", in: null, out: null, balance: opening });

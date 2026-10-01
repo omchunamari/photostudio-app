@@ -57,6 +57,8 @@ export async function createInvoice(data, createdByUid, createdByName) {
     paidAt: (data.status || "unpaid") === "paid" ? data.paidAt || data.date || now.slice(0, 10) : null,
     amount: Number(data.amount) || 0,
     status: data.status || "unpaid",
+    // Finance account the money landed in (optional; can be assigned later in Finance).
+    accountId: data.accountId ?? null,
     note: data.note || "",
     createdBy: createdByUid,
     createdByName: createdByName || "",
@@ -87,6 +89,7 @@ export async function setInvoiceStatus(id, status, paidAt) {
   await updateDoc(doc(db, "invoices", id), {
     status,
     paidAt: status === "paid" ? paidAt || todayISO() : null,
+    ...(status === "paid" ? {} : { accountId: null }),
     updatedAt: new Date().toISOString(),
   });
 }

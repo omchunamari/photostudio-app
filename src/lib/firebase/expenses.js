@@ -93,6 +93,8 @@ export async function createExpense(data, createdByUid, createdByName) {
     category: data.category || (data.type === "manual" ? "Miscellaneous" : ""),
     amount: Number(data.amount) || 0,
     description: data.description || "",
+    // Finance account the expense was paid from (optional; can be assigned later in Finance).
+    accountId: data.accountId ?? null,
     personUid: data.personUid || null,
     personName: data.personName || null,
     personType: data.personType || null,

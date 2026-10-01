@@ -105,7 +105,7 @@ export default function useFinanceData() {
     reload();
   }, [reload]);
 
-  const balances = useMemo(() => computeBalances(state.accounts, state.ledger), [state.accounts, state.ledger]);
+  const balances = useMemo(() => computeBalances(state.accounts, state.all), [state.accounts, state.all]);
 
   return { ...state, balances, reload };
 }
