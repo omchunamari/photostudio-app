@@ -97,11 +97,11 @@ export default function AppShell({ children }) {
 
       {/* Sidebar — fixed drawer on mobile, static column on desktop */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-60 shrink-0 border-r border-sidebar-border bg-sidebar p-4 flex flex-col transition-transform duration-200 md:static md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-dvh w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar p-4 transition-transform duration-200 md:sticky md:top-0 md:h-screen md:self-start md:translate-x-0 ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="mb-6 flex items-center justify-between px-2">
+        <div className="mb-5 flex shrink-0 items-center justify-between px-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="aperture-ring rounded-full shrink-0">
               <Image src="/logo-light.png" alt="The Rolling Stories" width={28} height={28} className="h-7 w-7 object-contain" />
@@ -119,7 +119,7 @@ export default function AppShell({ children }) {
             </Button>
           </div>
         </div>
-        <nav className="flex flex-col gap-1 flex-1">
+        <nav className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1 [scrollbar-width:thin]">
           {visibleNavItems.map((item) => {
             const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
             return (
@@ -127,7 +127,7 @@ export default function AppShell({ children }) {
                 key={item.href}
                 href={item.href}
                 onClick={() => setMobileOpen(false)}
-                className={`relative flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                className={`relative flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                   isActive
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
@@ -142,7 +142,7 @@ export default function AppShell({ children }) {
             );
           })}
         </nav>
-        <div className="flex items-center gap-2 border-t border-sidebar-border pt-4">
+        <div className="mt-3 flex shrink-0 items-center gap-2 border-t border-sidebar-border pt-3">
           <AvatarInitials name={user?.name} size="sm" />
           <div className="flex-1 min-w-0">
             <p className="truncate text-sm font-medium text-sidebar-foreground">{user?.name}</p>
@@ -160,7 +160,7 @@ export default function AppShell({ children }) {
           fixed-position bell would sit on top of them. This pushes content
           down by a small, consistent amount instead. Mobile doesn't need
           this: its top bar above already has the one bell, top-right. */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         <div className="hidden shrink-0 items-center justify-end border-b border-border bg-background px-6 py-2 md:flex">
           <NotificationBell uid={user?.uid} />
         </div>
