@@ -575,7 +575,8 @@ function AttendanceContent() {
                 </div>
 
                 <p className="mb-3 text-xs text-muted-foreground">
-                  Working days exclude Sundays and org holidays ({cal.holidays} this month) ·{" "}
+                  Working days exclude Sundays and org holidays ({cal.holidays} this month). Leave = approved leave requests;
+                  a working day with no check-in is Absent (the nightly job also deducts a paid leave for it) ·{" "}
                   <Link href="/settings?tab=holidays" className="underline-offset-2 hover:underline">Manage holiday list</Link>
                 </p>
 

@@ -7,7 +7,11 @@ import { getHolidayForDate } from "@/lib/holidays";
 
 // "late" isn't produced by check-in today; kept here so any such record still counts as present.
 export const PRESENT_STATUSES = ["present", "late"];
-export const LEAVE_STATUSES = ["auto_leave", "on_leave"];
+export const LEAVE_STATUSES = ["on_leave"];
+// Written by the nightly cron for a working day with no check-in (or no daily
+// report). It deducts a paid leave, but the person simply didn't show up, so the
+// month view counts it as Absent — "Leave" means leave that was applied for.
+export const AUTO_ABSENT_STATUS = "auto_leave";
 
 /** "YYYY-MM-DD" for every day of a month. month is 1-indexed. */
 export function monthDates(year, month) {
@@ -74,6 +78,9 @@ export function employeeMonth(calendar, records, leaves, today) {
       }
     } else if (!d.working) {
       kind = d.holidayName ? "holiday" : "off";
+    } else if (rec && rec.status === AUTO_ABSENT_STATUS) {
+      kind = "absent";
+      absent++;
     } else if ((rec && LEAVE_STATUSES.includes(rec.status)) || leaveCovers(leaves, d.date)) {
       kind = "leave";
       if (d.date <= today) leave++;

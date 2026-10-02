@@ -58,7 +58,7 @@ export function MonthCalendar({ days, compact = false }) {
           const r = d.record;
           const title = [
             d.date,
-            d.holidayName || s.label,
+            d.record?.status === "auto_leave" ? "Absent — auto-marked, 1 paid leave deducted" : d.holidayName || s.label,
             r?.checkInTime ? `In ${formatTime12(r.checkInTime)}` : null,
             r?.checkOutTime ? `Out ${formatTime12(r.checkOutTime)}` : null,
           ]
