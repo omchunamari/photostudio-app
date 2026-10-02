@@ -71,7 +71,7 @@ export default function DailyReportPanel() {
 
 // Exported so the Attendance page can show the employee's own report form
 // right under the check-in card (check-out needs today's report).
-export function EmployeeReportForm() {
+export function EmployeeReportForm({ className = "" }) {
     const { user } = useAuth();
     const [loading, setLoading] = useState(true);
     const [existingReport, setExistingReport] = useState(null);
@@ -170,7 +170,7 @@ export function EmployeeReportForm() {
     const showOffNotice = offInfo && !existingReport && !submitAnyway;
 
     return (
-        <Card>
+        <Card className={className}>
             <CardContent className="p-4 sm:p-5">
                 <h3 className="mb-1 text-sm font-semibold text-foreground sm:text-base">
                     Today&apos;s Daily Report

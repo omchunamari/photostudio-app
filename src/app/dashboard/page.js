@@ -514,9 +514,10 @@ function EmployeeHome({ user, projects, events, deliverables, loaded }) {
   return (
     <div className="flex flex-col gap-5">
       {/* Today */}
-      <div className="grid items-start gap-4 lg:grid-cols-2">
-        <AttendanceCard />
-        <EmployeeReportForm />
+      {/* Equal-height pair: both cards stretch to the taller one. */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <AttendanceCard className="h-full" />
+        <EmployeeReportForm className="h-full" />
       </div>
 
       {/* At a glance */}
