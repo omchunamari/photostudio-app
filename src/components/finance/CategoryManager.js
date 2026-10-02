@@ -55,7 +55,7 @@ export default function CategoryManager({ open, onOpenChange, cats, onSaved }) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[95vw] max-w-xl overflow-y-auto sm:w-full">
+      <DialogContent className="max-h-[90vh] w-[95vw] max-w-xl sm:max-w-xl overflow-y-auto sm:w-full">
         <DialogHeader>
           <DialogTitle>Manage categories</DialogTitle>
         </DialogHeader>

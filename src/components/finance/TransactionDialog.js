@@ -141,7 +141,7 @@ export default function TransactionDialog({ open, onOpenChange, data, initial, u
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[95vw] max-w-lg overflow-y-auto sm:w-full">
+      <DialogContent className="max-h-[90vh] w-[95vw] max-w-lg sm:max-w-lg overflow-y-auto sm:w-full">
         <DialogHeader>
           <DialogTitle>
             {editing ? "Edit transaction" : fromAllowance ? "Log spend from allowance" : "Add transaction"}

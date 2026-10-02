@@ -116,7 +116,7 @@ export default function FreelancerPayouts({ data, onPay }) {
 
       {/* Person detail: project → events */}
       <Dialog open={!!person} onOpenChange={(o) => !o && setPersonId(null)}>
-        <DialogContent className="max-h-[90vh] w-[95vw] max-w-2xl overflow-y-auto sm:w-full">
+        <DialogContent className="max-h-[90vh] w-[95vw] max-w-2xl overflow-y-auto sm:w-full sm:max-w-3xl">
           {person && (
             <>
               <DialogHeader>
@@ -159,7 +159,7 @@ export default function FreelancerPayouts({ data, onPay }) {
 
                       {expanded && (
                         <div className="border-t border-border p-3">
-                          <ul className="flex flex-col gap-1.5">
+                          <ul className="grid gap-1.5 sm:grid-cols-2">
                             {pr.events.map((e) => (
                               <li key={e.eventId} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-2 text-sm">
                                 <div className="min-w-0">
