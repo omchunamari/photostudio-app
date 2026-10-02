@@ -138,16 +138,42 @@ function EmployeesContent() {
         );
     }
 
+    // Delete is gated by the server's finance check — see /api/employees/delete.
+    const [deleteCheck, setDeleteCheck] = useState(null); // { emp, code, blocking, history }
+    const [deleting, setDeleting] = useState(false);
+
     async function handleDelete(emp) {
         const confirmed = window.confirm(
-            `Permanently delete ${emp.name}? This will remove their account, attendance history, leave records, and device records. This cannot be undone.`
+            `Permanently delete ${emp.name}? This will remove their account, attendance history, leave records, and device records. This cannot be undone.\n\nIf they have left the company, Deactivate is usually the better choice.`
         );
         if (!confirmed) return;
+        await runDelete(emp, false);
+    }
 
+    async function runDelete(emp, force) {
+        setDeleting(true);
         try {
-            await deleteEmployee(emp.uid);
+            await deleteEmployee(emp.uid, { force });
             toast.success(`${emp.name} deleted permanently`);
             setEmployees((prev) => prev.filter((e) => e.uid !== emp.uid));
+            setDeleteCheck(null);
+        } catch (err) {
+            if (err.code === "FINANCE_PENDING" || err.code === "FINANCE_HISTORY") {
+                setDeleteCheck({ emp, code: err.code, blocking: err.blocking, history: err.history });
+            } else {
+                toast.error(err.message);
+            }
+        } finally {
+            setDeleting(false);
+        }
+    }
+
+    async function deactivateInstead(emp) {
+        try {
+            if (emp.status === "active") await deactivateEmployee(emp.uid);
+            setEmployees((prev) => prev.map((e) => (e.uid === emp.uid ? { ...e, status: "inactive" } : e)));
+            toast.success(`${emp.name} deactivated — their history stays in Finance under "Former staff"`);
+            setDeleteCheck(null);
         } catch (err) {
             toast.error(err.message);
         }
@@ -607,6 +633,52 @@ function EmployeesContent() {
                                     {r.email} — {r.success ? "created" : r.error}
                                 </p>
                             ))}
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+            {/* Finance check: shown when the server refuses or questions a delete */}
+            <Dialog open={!!deleteCheck} onOpenChange={(o) => !o && setDeleteCheck(null)}>
+                <DialogContent className="w-[95vw] max-w-md sm:w-full">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {deleteCheck?.code === "FINANCE_PENDING"
+                                ? `Can't delete ${deleteCheck?.emp.name} yet`
+                                : `${deleteCheck?.emp.name} has finance history`}
+                        </DialogTitle>
+                    </DialogHeader>
+                    {deleteCheck && (
+                        <div className="flex flex-col gap-4 text-sm">
+                            {deleteCheck.blocking.length > 0 && (
+                                <div className="rounded-lg bg-destructive/10 p-3">
+                                    <p className="mb-1 font-medium text-destructive">Still pending in Finance</p>
+                                    <ul className="list-disc pl-5 text-foreground">
+                                        {deleteCheck.blocking.map((b) => <li key={b}>{b}</li>)}
+                                    </ul>
+                                    <p className="mt-2 text-xs text-muted-foreground">Settle these in Finance before deleting.</p>
+                                </div>
+                            )}
+                            {deleteCheck.history.length > 0 && (
+                                <div className="rounded-lg bg-muted/60 p-3">
+                                    <p className="mb-1 font-medium">Finance records that would be left without an employee</p>
+                                    <ul className="list-disc pl-5 text-muted-foreground">
+                                        {deleteCheck.history.map((h) => <li key={h}>{h}</li>)}
+                                    </ul>
+                                </div>
+                            )}
+                            <p className="text-muted-foreground">
+                                <b className="text-foreground">Deactivate instead</b> to stop their login while keeping attendance,
+                                payslips and finance history. They&apos;ll appear under &ldquo;Former staff&rdquo; in Finance.
+                            </p>
+                            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                <Button variant="outline" onClick={() => setDeleteCheck(null)}>Cancel</Button>
+                                {deleteCheck.code === "FINANCE_HISTORY" && (
+                                    <Button variant="destructive" disabled={deleting} onClick={() => runDelete(deleteCheck.emp, true)}>
+                                        {deleting ? "Deleting..." : "Delete anyway"}
+                                    </Button>
+                                )}
+                                <Button onClick={() => deactivateInstead(deleteCheck.emp)}>Deactivate instead</Button>
+                            </div>
                         </div>
                     )}
                 </DialogContent>

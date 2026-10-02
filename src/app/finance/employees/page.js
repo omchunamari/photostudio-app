@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { TrendingUp, IndianRupee, HandCoins, History, BellRing } from "lucide-react";
-import FinanceShell, { PageSkeleton } from "@/components/finance/FinanceShell";
+import { TrendingUp, IndianRupee, HandCoins, History, BellRing, Users } from "lucide-react";
+import FinanceShell, { PageSkeleton, EmptyState, Segmented } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { saveSalaryStructure, applyIncrement, createEmployeeAdvance, advanceOutstanding } from "@/lib/firebase/payroll";
@@ -27,19 +27,40 @@ function Content() {
   const [saving, setSaving] = useState(false);
   const [q, setQ] = useState("");
 
-  const staff = useMemo(
-    () =>
-      data.employees
-        .filter((e) => e.status !== "inactive" && e.status !== "resigned")
-        .filter((e) => !q || e.name?.toLowerCase().includes(q.toLowerCase()) || e.employeeId?.toLowerCase().includes(q.toLowerCase()))
-        .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
-    [data.employees, q]
+  const [view, setView] = useState("current"); // current | former
+  const isFormer = view === "former";
+
+  const current = useMemo(
+    () => data.employees.filter((e) => e.status !== "inactive" && e.status !== "resigned"),
+    [data.employees]
   );
+
+  // Former staff: deactivated / resigned employees, plus anyone whose profile was
+  // deleted but who still has payroll, salary or advance records here.
+  const former = useMemo(() => {
+    const list = data.employees.filter((e) => e.status === "inactive" || e.status === "resigned");
+    const known = new Set(data.employees.map((e) => e.uid));
+    const orphans = new Map();
+    const add = (uid, name, extra = {}) => {
+      if (!uid || known.has(uid) || orphans.has(uid)) return;
+      orphans.set(uid, { uid, name: name || "Deleted employee", status: "deleted", employeeId: "", department: "", ...extra });
+    };
+    data.payrolls.forEach((p) => add(p.employeeUid, p.employeeName, { employeeId: p.employeeCode || "", department: p.department || "" }));
+    data.advances.forEach((a) => add(a.employeeUid, a.employeeName));
+    Object.keys(data.employeeFinance).forEach((uid) => add(uid, null));
+    return [...list, ...orphans.values()];
+  }, [data.employees, data.payrolls, data.advances, data.employeeFinance]);
+
+  const staff = (isFormer ? former : current)
+    .filter((e) => !q || e.name?.toLowerCase().includes(q.toLowerCase()) || e.employeeId?.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+  const STATUS_LABEL = { inactive: "Inactive", resigned: "Resigned", deleted: "Deleted" };
 
   const accountOptions = data.accounts.filter((a) => a.active !== false).map((a) => ({ value: a.id, label: a.name }));
   const outstandingFor = (uid) => data.advances.filter((a) => a.employeeUid === uid).reduce((s, a) => s + advanceOutstanding(a), 0);
 
-  const due = staff.filter((e) => {
+  const due = current.filter((e) => {
     const d = daysUntil(data.employeeFinance[e.uid]?.nextIncrementDate);
     return d != null && d <= INCREMENT_REMINDER_DAYS;
   });
@@ -86,9 +107,25 @@ function Content() {
         </div>
       )}
 
-      <div className="mb-3 max-w-xs">
-        <Input placeholder="Search employee..." value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Segmented
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "current", label: `Current staff (${current.length})` },
+            { value: "former", label: `Former staff (${former.length})` },
+          ]}
+        />
+        <Input className="sm:max-w-xs" placeholder="Search employee..." value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+      {isFormer && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Deactivated, resigned or deleted employees. Their payslips and history stay here; new increments and advances are switched off.
+        </p>
+      )}
+      {!data.loading && staff.length === 0 && (
+        <EmptyState icon={Users} title={isFormer ? "No former staff" : "No employees found"} hint={isFormer ? "Employees you deactivate will be listed here." : undefined} />
+      )}
 
       {data.loading ? (
         <PageSkeleton stats={0} rows={6} />
@@ -105,7 +142,10 @@ function Content() {
                 <div key={e.uid} className="rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{e.name}</p>
+                      <p className="truncate font-medium">
+                        {e.name}
+                        {STATUS_LABEL[e.status] && <span className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{STATUS_LABEL[e.status]}</span>}
+                      </p>
                       <p className="truncate text-xs text-muted-foreground">{e.employeeId} · {e.department}</p>
                     </div>
                     <p className="shrink-0 font-semibold tabular-nums">
@@ -125,8 +165,8 @@ function Content() {
                   </div>
                   <div className="mt-2 grid grid-cols-4 gap-1 border-t border-border pt-2">
                     <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" onClick={() => open("salary", e)}><IndianRupee className="h-4 w-4" />Salary</Button>
-                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" disabled={!f?.monthlySalary} onClick={() => open("increment", e)}><TrendingUp className="h-4 w-4" />Raise</Button>
-                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" onClick={() => open("advance", e)}><HandCoins className="h-4 w-4" />Advance</Button>
+                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" disabled={isFormer || !f?.monthlySalary} onClick={() => open("increment", e)}><TrendingUp className="h-4 w-4" />Raise</Button>
+                    <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" disabled={isFormer} onClick={() => open("advance", e)}><HandCoins className="h-4 w-4" />Advance</Button>
                     <Button size="sm" variant="ghost" className="flex-col gap-0.5 h-auto py-1.5 text-[11px]" onClick={() => open("history", e)}><History className="h-4 w-4" />History</Button>
                   </div>
                 </div>
@@ -156,7 +196,10 @@ function Content() {
                   return (
                     <TableRow key={e.uid}>
                       <TableCell>
-                        <p className="font-medium">{e.name}</p>
+                        <p className="font-medium">
+                          {e.name}
+                          {STATUS_LABEL[e.status] && <span className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{STATUS_LABEL[e.status]}</span>}
+                        </p>
                         <p className="text-xs text-muted-foreground">{e.employeeId} · {e.department}</p>
                       </TableCell>
                       <TableCell className="text-right font-medium">{f?.monthlySalary != null ? inr(f.monthlySalary) : <span className="text-muted-foreground/60">Not set</span>}</TableCell>
@@ -169,8 +212,8 @@ function Content() {
                       <TableCell>
                         <div className="flex justify-end gap-1">
                           <Button size="icon-sm" variant="ghost" title="Salary" onClick={() => open("salary", e)}><IndianRupee className="h-3.5 w-3.5" /></Button>
-                          <Button size="icon-sm" variant="ghost" title="Increment" disabled={!f?.monthlySalary} onClick={() => open("increment", e)}><TrendingUp className="h-3.5 w-3.5" /></Button>
-                          <Button size="icon-sm" variant="ghost" title="Advance / loan" onClick={() => open("advance", e)}><HandCoins className="h-3.5 w-3.5" /></Button>
+                          <Button size="icon-sm" variant="ghost" title="Increment" disabled={isFormer || !f?.monthlySalary} onClick={() => open("increment", e)}><TrendingUp className="h-3.5 w-3.5" /></Button>
+                          <Button size="icon-sm" variant="ghost" title="Advance / loan" disabled={isFormer} onClick={() => open("advance", e)}><HandCoins className="h-3.5 w-3.5" /></Button>
                           <Button size="icon-sm" variant="ghost" title="History" onClick={() => open("history", e)}><History className="h-3.5 w-3.5" /></Button>
                         </div>
                       </TableCell>

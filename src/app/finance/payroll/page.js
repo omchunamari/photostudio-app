@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Calculator, Download, Wallet, Undo2, SlidersHorizontal, Banknote, CheckCircle2, Clock } from "lucide-react";
-import FinanceShell, { Stat, PageSkeleton } from "@/components/finance/FinanceShell";
+import FinanceShell, { Stat, PageSkeleton, EmptyState, Segmented } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import {
@@ -127,8 +127,33 @@ function Content() {
       });
   }, [data.employees, data.employeeFinance, data.payrolls, data.advances, leaveSrc, month, adjust]);
 
+  // Former staff: deactivated / resigned / deleted people who have a saved
+  // payroll for this month. Shown from the saved snapshot — never recomputed.
+  const formerRows = useMemo(() => {
+    const currentUids = new Set(
+      data.employees.filter((e) => e.status !== "inactive" && e.status !== "resigned").map((e) => e.uid)
+    );
+    return data.payrolls
+      .filter((p) => p.month === month && !currentUids.has(p.employeeUid))
+      .map((p) => {
+        const emp = data.employees.find((e) => e.uid === p.employeeUid) || {
+          uid: p.employeeUid,
+          name: p.employeeName,
+          employeeId: p.employeeCode || "",
+          department: p.department || "",
+          status: "deleted",
+        };
+        return { emp, payroll: p, locked: p.status === "paid", saved: true, former: true };
+      })
+      .sort((a, b) => (a.emp.name || "").localeCompare(b.emp.name || ""));
+  }, [data.employees, data.payrolls, month]);
+
+  const [view, setView] = useState("current"); // current | former
+  const shownRows = view === "former" ? formerRows : rows;
+  const allRows = [...rows, ...formerRows];
+
   const payable = rows.filter((r) => r.payroll && !r.locked);
-  const totals = rows.reduce(
+  const totals = allRows.reduce(
     (t, r) => {
       if (!r.payroll) return t;
       t.net += r.payroll.netSalary;
@@ -157,7 +182,7 @@ function Content() {
   async function confirmPay() {
     setBusy(true);
     try {
-      const targets = payTarget === "ALL" ? payable.filter((r) => r.saved) : [rows.find((r) => r.payroll?.id === payTarget.payroll.id)];
+      const targets = payTarget === "ALL" ? payable.filter((r) => r.saved) : [allRows.find((r) => r.payroll?.id === payTarget.payroll.id)];
       for (const r of targets) {
         // Re-process first so the payment always matches what's on screen.
         await processPayroll(r.payroll, by);
@@ -215,13 +240,27 @@ function Content() {
         <Stat icon={Clock} label="Salary pending" value={inr(totals.pending)} tone={totals.pending ? "warning" : "neutral"} />
       </div>
 
+      <div className="mb-3">
+        <Segmented
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "current", label: `Current staff (${rows.length})` },
+            { value: "former", label: `Former staff (${formerRows.length})` },
+          ]}
+        />
+      </div>
+      {view === "former" && formerRows.length === 0 && !data.loading && (
+        <EmptyState icon={Banknote} title={`No former staff payroll for ${monthLabel(month)}`} hint="Deactivated or deleted employees appear here for months they were paid or processed." />
+      )}
+
       {data.loading || !leaveSrc.loaded ? (
         <PageSkeleton stats={0} rows={6} />
       ) : (
         <>
           {/* Phone: one card per employee */}
           <div className="flex flex-col gap-2 md:hidden">
-            {rows.map((r) => {
+            {shownRows.map((r) => {
               const p = r.payroll;
               if (!p)
                 return (
@@ -264,9 +303,11 @@ function Content() {
                   <div className="mt-2 flex items-center justify-end gap-1 border-t border-border pt-2">
                     {!r.locked && (
                       <>
-                        <Button size="sm" variant="ghost" onClick={() => setAdjTarget(r)}>
-                          <SlidersHorizontal className="h-3.5 w-3.5" /> Adjust
-                        </Button>
+                        {!r.former && (
+                          <Button size="sm" variant="ghost" onClick={() => setAdjTarget(r)}>
+                            <SlidersHorizontal className="h-3.5 w-3.5" /> Adjust
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           onClick={() => {
@@ -313,7 +354,7 @@ function Content() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r) => {
+                {shownRows.map((r) => {
                   const p = r.payroll;
                   if (!p)
                     return (
@@ -344,7 +385,7 @@ function Content() {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
-                          {!r.locked && (
+                          {!r.locked && !r.former && (
                             <Button size="icon-sm" variant="ghost" title="Adjust" onClick={() => setAdjTarget(r)}>
                               <SlidersHorizontal className="h-3.5 w-3.5" />
                             </Button>
