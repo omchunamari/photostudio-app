@@ -83,9 +83,30 @@ service cloud.firestore {
     }
 
     // --- users (employee profiles) ---
+    // role is the sensitive field. Only admin/super_admin may change it, nobody
+    // changes their own, and only a super_admin may grant or remove super_admin.
+    function roleChangeAllowed(uid) {
+      return request.resource.data.get('role', null) == resource.data.get('role', null) ||
+        (isAdmin() && request.auth.uid != uid &&
+          (myRole() == 'super_admin' ||
+            (request.resource.data.get('role', null) != 'super_admin' && resource.data.get('role', null) != 'super_admin')));
+    }
+
+    // A super_admin's profile can only be edited by a super_admin — except the
+    // leave-balance bookkeeping that leave / comp-off approval writes.
+    function superAdminProfileGuard() {
+      return resource.data.get('role', null) != 'super_admin' || myRole() == 'super_admin' ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leaveBalance', 'updatedAt']);
+    }
+
     match /users/{uid} {
       allow read: if isSignedIn();
-      allow update: if isHR() || (isSignedIn() && request.auth.uid == uid);
+      // HR / admin manage profiles (edit, deactivate, leave balance) within the role guards above.
+      allow update: if isHR() && roleChangeAllowed(uid) && superAdminProfileGuard();
+      // Self-service is limited to what the app writes on login / password change.
+      // (Previously any employee could rewrite their own doc — including role.)
+      allow update: if isSignedIn() && request.auth.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt', 'forcePasswordChange', 'updatedAt']);
       allow create, delete: if false;
     }
 
@@ -97,15 +118,27 @@ service cloud.firestore {
       allow get: if isAttendanceManager() || isFinance() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);   // CHANGED: + isFinance()
       allow list: if isAttendanceManager() || isFinance() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);   // CHANGED: + isFinance()
       allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid && docId.split('_')[0] == request.auth.uid;
-      allow update: if isAttendanceManager() || (isSignedIn() && docId.split('_')[0] == request.auth.uid);
+      // Self-service updates are check-out and breaks only — an employee can't
+      // rewrite their own check-in time or status.
+      allow update: if isAttendanceManager() ||
+        (isSignedIn() && docId.split('_')[0] == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkOutTime', 'totalWorkingMs', 'breaks']));
       allow delete: if isAdmin();
     }
 
     // --- leaveRequests --- (random auto-ids)
     match /leaveRequests/{docId} {
       allow read: if isHR() || isFinance() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);   // CHANGED: + isFinance()
-      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid;
-      allow update: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
+      // New requests always start pending — nobody files an already-approved leave.
+      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid &&
+        request.resource.data.status == 'pending';
+      // An employee may only withdraw their own *pending* request; approving or
+      // rejecting stays with HR (previously they could approve their own).
+      allow update: if isHR() ||
+        (isSignedIn() && resource.data.employeeUid == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status in ['pending', 'cancelled'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reason', 'updatedAt', 'cancelledAt']));
       allow delete: if isAdmin();
     }
 
@@ -129,7 +162,8 @@ service cloud.firestore {
     // --- compOffRequests ---
     match /compOffRequests/{docId} {
       allow read: if isHR() || (isSignedIn() && resource.data.employeeUid == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.employeeUid == request.auth.uid &&
+        request.resource.data.status == 'pending';
       allow update: if isHR();
       allow delete: if isAdmin();
     }
@@ -298,7 +332,12 @@ service cloud.firestore {
       allow get: if isSignedIn();
       allow list: if isSignedIn();
       allow create: if isProjectOps();
-      allow update: if isProjectOps() || (isSignedIn() && resource.data.leaderUid == request.auth.uid);
+      // A Project Leader runs their project day to day, but can't reassign the
+      // leader role or change the money/link fields — those stay admin/PM.
+      allow update: if isProjectOps() ||
+        (isSignedIn() && resource.data.leaderUid == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['leaderUid', 'leaderName', 'quotationAmount', 'quotationId', 'leadId']));
       allow delete: if isAdmin();
 
       match /deliverables/{deliverableId} {

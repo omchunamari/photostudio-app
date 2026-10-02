@@ -67,6 +67,7 @@ import {
   Search,
   Globe,
 } from "lucide-react";
+import { getISTDateStr } from "@/lib/dateIST";
 
 // Small badge marking a lead that arrived through the public enquiry form,
 // so it reads apart from leads someone typed in by hand.
@@ -230,7 +231,7 @@ function LeadsContent() {
     URL.revokeObjectURL(url);
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getISTDateStr();
   // "Won"/"Quoted" are older stage values kept readable for leads created
   // before the pipeline changed — not closed out, so still eligible for a
   // follow-up nudge same as any other non-terminal stage.

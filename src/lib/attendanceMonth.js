@@ -56,7 +56,8 @@ function leaveCovers(requests, date) {
  * row for a day already covered by approved leave — counting only attendance
  * rows would show those days as absent.
  */
-export function employeeMonth(calendar, records, leaves, today) {
+export function employeeMonth(calendar, records, leaves, today, joinedOn = null) {
+  const joined = joinedOn ? String(joinedOn).slice(0, 10) : "";
   const byDate = new Map(records.map((r) => [r.date, r]));
   let present = 0;
   let leave = 0;
@@ -78,6 +79,8 @@ export function employeeMonth(calendar, records, leaves, today) {
       }
     } else if (!d.working) {
       kind = d.holidayName ? "holiday" : "off";
+    } else if (joined && d.date < joined) {
+      kind = "future"; // before they joined — not a day they could be absent
     } else if (rec && rec.status === AUTO_ABSENT_STATUS) {
       kind = "absent";
       absent++;
@@ -97,7 +100,8 @@ export function employeeMonth(calendar, records, leaves, today) {
 
   // Today only counts toward the % once they've actually checked in.
   const todayPending = days.some((d) => d.kind === "today");
-  const denominator = calendar.workingDaysSoFar - (todayPending ? 1 : 0);
+  const beforeJoining = joined ? calendar.days.filter((d) => d.working && d.date < joined && d.date <= today).length : 0;
+  const denominator = calendar.workingDaysSoFar - (todayPending ? 1 : 0) - beforeJoining;
 
   return {
     days,

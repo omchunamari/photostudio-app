@@ -11,6 +11,8 @@ import {
 } from "firebase/firestore";
 import { db } from "./client";
 import { notifyEmployee } from "./notifications";
+import { getOrgHolidays } from "./holidays";
+import { isHolidayDate } from "@/lib/holidays";
 
 export const LEAVE_TYPES = ["Paid"];
 
@@ -54,6 +56,9 @@ async function hasAttendanceMarkedInRange(uid, startDate, endDate) {
 }
 
 export async function applyLeave({ employeeUid, employeeName, department, leaveType, startDate, endDate, reason }) {
+  if (!startDate || !endDate) throw new Error("Please select both start and end dates.");
+  // A reversed range used to slip through, count as 0 days and never deduct.
+  if (endDate < startDate) throw new Error("End date can't be before the start date.");
   const overlapping = await hasOverlappingLeave(employeeUid, startDate, endDate);
   if (overlapping) {
     throw new Error("You already have a leave request for one or more of these dates.");
@@ -118,14 +123,17 @@ export async function getPendingLeaveRequests() {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-function countLeaveDays(startDate, endDate) {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+// Days that actually cost leave: skips Sundays and the org's fixed holidays
+// (Settings → Holidays), the same days attendance treats as non-working.
+// Walks dates in UTC so the result doesn't depend on the browser's timezone.
+function countLeaveDays(startDate, endDate, holidays = []) {
   let count = 0;
-  const current = new Date(start);
+  const current = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
   while (current <= end) {
-    if (current.getDay() !== 0) count++; // skip Sundays
-    current.setDate(current.getDate() + 1);
+    const dateStr = current.toISOString().slice(0, 10);
+    if (current.getUTCDay() !== 0 && !isHolidayDate(dateStr, holidays)) count++;
+    current.setUTCDate(current.getUTCDate() + 1);
   }
   return count;
 }
@@ -148,6 +156,14 @@ export async function decideLeaveRequest(requestId, decision, decidedByUid, leav
     updates.rejectionReason = rejectionReason.trim();
   }
 
+  // Only a pending request can be decided. Without this, approving twice
+  // (double-click, or two HR people at once) deducted the balance twice.
+  const current = await getDoc(doc(db, "leaveRequests", requestId));
+  if (!current.exists()) throw new Error("Leave request not found.");
+  if (current.data().status !== "pending") {
+    throw new Error(`This request is already ${current.data().status}.`);
+  }
+
   await updateDoc(doc(db, "leaveRequests", requestId), updates);
 
   if (decision === "approved" && leaveRequest) {
@@ -155,7 +171,8 @@ export async function decideLeaveRequest(requestId, decision, decidedByUid, leav
     const userSnap = await getDoc(userRef);
     if (userSnap.exists()) {
       const currentBalance = userSnap.data().leaveBalance || {};
-      const daysUsed = countLeaveDays(leaveRequest.startDate, leaveRequest.endDate);
+      const holidays = await getOrgHolidays().catch(() => []);
+      const daysUsed = countLeaveDays(leaveRequest.startDate, leaveRequest.endDate, holidays);
       const currentTypeBalance = currentBalance[leaveRequest.leaveType] || 0;
       const updatedBalance = {
         ...currentBalance,

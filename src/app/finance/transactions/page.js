@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import SearchableSelect from "@/components/ui/searchable-select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { getISTDateStr } from "@/lib/dateIST";
 
 const KIND_FILTER = [
   { value: "all", label: "All types" },
@@ -167,7 +168,7 @@ function Content() {
           title="Mark paid"
           onClick={() => {
             setPayTarget(t);
-            setPayForm({ accountId: "", date: new Date().toISOString().slice(0, 10) });
+            setPayForm({ accountId: "", date: getISTDateStr() });
           }}
         >
           <CheckCircle2 className="h-3.5 w-3.5 text-success" /> <span className="md:hidden">Mark paid</span>

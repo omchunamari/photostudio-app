@@ -150,7 +150,7 @@ function workingDaysSub(cal, isCurrentMonth) {
 // ---------------------------------------------------------------------------
 // My month — every employee who marks attendance sees their own numbers.
 // ---------------------------------------------------------------------------
-function MyMonth({ uid, holidays, today }) {
+function MyMonth({ uid, holidays, today, joiningDate }) {
   const [ym, setYm] = useState({ y: Number(today.slice(0, 4)), m: Number(today.slice(5, 7)) });
   const [history, setHistory] = useState(null);
   const [leaves, setLeaves] = useState([]);
@@ -168,8 +168,8 @@ function MyMonth({ uid, holidays, today }) {
   const mine = useMemo(() => {
     if (!history) return null;
     const prefix = `${ym.y}-${String(ym.m).padStart(2, "0")}`;
-    return employeeMonth(cal, history.filter((r) => r.date?.startsWith(prefix)), leaves, today);
-  }, [history, leaves, cal, ym, today]);
+    return employeeMonth(cal, history.filter((r) => r.date?.startsWith(prefix)), leaves, today, joiningDate);
+  }, [history, leaves, cal, ym, today, joiningDate]);
 
   const isCurrent = today.startsWith(`${ym.y}-${String(ym.m).padStart(2, "0")}`);
 
@@ -308,7 +308,7 @@ function AttendanceContent() {
     monthRecords.forEach((r) => {
       (recsByUid[r.employeeUid] ||= []).push(r);
     });
-    const people = new Map(staff.map((e) => [e.uid, { uid: e.uid, name: e.name, department: e.department }]));
+    const people = new Map(staff.map((e) => [e.uid, { uid: e.uid, name: e.name, department: e.department, joiningDate: e.joiningDate || e.createdAt || null }]));
     monthRecords.forEach((r) => {
       if (!people.has(r.employeeUid)) people.set(r.employeeUid, { uid: r.employeeUid, name: r.employeeName, department: r.department });
     });
@@ -316,7 +316,7 @@ function AttendanceContent() {
       .map((p) => ({
         ...p,
         records: (recsByUid[p.uid] || []).sort((a, b) => a.date.localeCompare(b.date)),
-        ...employeeMonth(cal, recsByUid[p.uid] || [], monthLeaves.filter((l) => l.employeeUid === p.uid), today),
+        ...employeeMonth(cal, recsByUid[p.uid] || [], monthLeaves.filter((l) => l.employeeUid === p.uid), today, p.joiningDate),
       }))
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [staff, monthRecords, monthLeaves, cal, today]);
@@ -407,7 +407,7 @@ function AttendanceContent() {
             <div>
               <AttendanceCard />
             </div>
-            <MyMonth uid={user.uid} holidays={orgHolidays} today={today} />
+            <MyMonth uid={user.uid} holidays={orgHolidays} today={today} joiningDate={user.joiningDate || user.createdAt || null} />
           </div>
         )}
 

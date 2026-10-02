@@ -42,6 +42,7 @@ export async function downloadPayslipPdf(payroll, employee) {
   if (payroll.otherEarnings) earnings.push(["Other earnings", inrPlain(payroll.otherEarnings)]);
   const deductions = [];
   if (payroll.lopDeduction) deductions.push([`Loss of pay (${payroll.lopDays} day${payroll.lopDays === 1 ? "" : "s"})`, inrPlain(payroll.lopDeduction)]);
+  if (payroll.notEmployedDeduction) deductions.push([`Before joining (${payroll.notEmployedDays} day${payroll.notEmployedDays === 1 ? "" : "s"})`, inrPlain(payroll.notEmployedDeduction)]);
   if (payroll.otherDeduction) deductions.push(["Other deduction", inrPlain(payroll.otherDeduction)]);
   if (payroll.advanceRecovery) deductions.push(["Advance / loan recovery", inrPlain(payroll.advanceRecovery)]);
   if (!deductions.length) deductions.push(["None", inrPlain(0)]);

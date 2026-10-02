@@ -24,6 +24,7 @@ import {
 import { getAllExpenses } from "./expenses";
 import { getAllInvoices } from "./invoices";
 import { legacyToTransactions } from "@/lib/finance/calc";
+import { getISTDateStr } from "@/lib/dateIST";
 
 /**
  * Finance ledger.
@@ -210,7 +211,7 @@ export async function markPayablePaid(id, accountId, date) {
   await updateDoc(doc(db, "financeTransactions", id), {
     status: "paid",
     accountId,
-    date: date || now().slice(0, 10),
+    date: date || getISTDateStr(),
     updatedAt: now(),
   });
 }
@@ -254,7 +255,7 @@ export async function createAllowance(data, by) {
   if (!data.accountId) throw new Error("Select an account");
   const id = newId("allowances");
   const txId = newId("financeTransactions");
-  const date = data.date || now().slice(0, 10);
+  const date = data.date || getISTDateStr();
   const batch = writeBatch(db);
   batch.set(doc(db, "allowances", id), {
     employeeUid: data.employeeUid,
@@ -326,7 +327,7 @@ export function allowanceSummary(allowance, txs) {
  * keeps it as pocket money).
  */
 export async function settleAllowance(allowance, balance, { mode, accountId, date }, by) {
-  const d = date || now().slice(0, 10);
+  const d = date || getISTDateStr();
   const batch = writeBatch(db);
   const patch = { status: "settled", settledAt: now(), updatedAt: now() };
   if (balance > 0) {

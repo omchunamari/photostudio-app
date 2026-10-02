@@ -12,6 +12,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./client";
+import { getISTDateStr } from "@/lib/dateIST";
 
 // --- Quote numbering ---
 // One global running counter (counters/quotations, { next: <int> }).
@@ -221,7 +222,7 @@ async function setInstallmentPaid(quotationId, installmentId, paid) {
   if (!q) throw new Error("Quotation not found");
   const installments = (q.installments || []).map((i) =>
     i.id === installmentId
-      ? { ...i, paid, paidDate: paid ? new Date().toISOString().slice(0, 10) : null }
+      ? { ...i, paid, paidDate: paid ? getISTDateStr() : null }
       : i
   );
   await updateDoc(doc(db, "quotations", quotationId), {

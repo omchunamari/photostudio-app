@@ -23,14 +23,14 @@ import {
 } from "@/components/ui/select";
 import { getAttendanceForDate } from "@/lib/firebase/attendance";
 import { getAllEmployees } from "@/lib/firebase/employees";
-import { getPendingLeaveRequests } from "@/lib/firebase/leave";
+import { getPendingLeaveRequests, getAllLeaveRequests } from "@/lib/firebase/leave";
 import { getAllDevices } from "@/lib/firebase/devices";
 import { getAnnouncement, setAnnouncement, clearAnnouncement, toggleAnnouncementAck } from "@/lib/firebase/announcements";
 import { getEventsForEmployee } from "@/lib/firebase/events";
 import { getDeliverablesForEmployee } from "@/lib/firebase/deliverables";
 import { isEventPast } from "@/lib/status";
 import { FINANCE_ROLES, fyStartYearForDate, fyLabel, loadFinanceOverview } from "@/lib/dashboardFinance";
-import { formatShortDateIST, formatShortDateTime12 } from "@/lib/dateIST";
+import { formatShortDateIST, formatShortDateTime12, getISTDateStr } from "@/lib/dateIST";
 import { toast } from "sonner";
 import {
   Users,
@@ -76,7 +76,6 @@ function DashboardContent() {
   const [finance, setFinance] = useState({
     totalRevenue: 0,
     projectsBooked: 0,
-    receivedOnBookings: 0,
     outstanding: 0,
     cashReceived: 0,
     monthly: [],
@@ -87,7 +86,7 @@ function DashboardContent() {
     if (!isFinanceView) return;
     let cancelled = false;
     setFinanceLoading(true);
-    loadFinanceOverview(fyStart)
+    loadFinanceOverview(fyStart, { includeLedger: ["super_admin", "admin"].includes(user.role) })
       .then((data) => {
         if (!cancelled) setFinance(data);
       })
@@ -98,7 +97,7 @@ function DashboardContent() {
     return () => {
       cancelled = true;
     };
-  }, [isFinanceView, fyStart]);
+  }, [isFinanceView, fyStart, user.role]);
 
   const [adminStats, setAdminStats] = useState({
     presentToday: null,
@@ -207,18 +206,24 @@ function DashboardContent() {
   }, [isAdminView]);
 
   async function loadAdminStats() {
-    const [todayAttendance, allEmployees, pendingLeaves, allDevices] = await Promise.all([
+    const today = getISTDateStr();
+    const [todayAttendance, allEmployees, pendingLeaves, allDevices, yearLeaves] = await Promise.all([
       getAttendanceForDate(),
       getAllEmployees(),
       getPendingLeaveRequests(),
       getAllDevices(),
+      getAllLeaveRequests(Number(today.slice(0, 4))).catch(() => []),
     ]);
 
-    const activeEmployees = allEmployees.filter((e) => e.status === "active");
-    const presentToday = todayAttendance.filter((r) =>
-      ["present", "late"].includes(r.status)
-    ).length;
-    const absentToday = activeEmployees.length - presentToday;
+    // Only people who are expected to mark attendance: active staff, minus
+    // super admins (they never check in) and anyone on approved leave today.
+    const onLeaveToday = new Set(
+      yearLeaves.filter((l) => l.status === "approved" && l.startDate <= today && today <= l.endDate).map((l) => l.employeeUid)
+    );
+    const expected = allEmployees.filter((e) => e.status === "active" && e.role !== "super_admin" && !onLeaveToday.has(e.uid));
+    const presentUids = new Set(todayAttendance.filter((r) => ["present", "late"].includes(r.status)).map((r) => r.employeeUid));
+    const presentToday = presentUids.size;
+    const absentToday = expected.filter((e) => !presentUids.has(e.uid)).length;
     const pendingDevices = allDevices.filter((d) => d.status === "pending").length;
 
     setAdminStats({
@@ -290,7 +295,7 @@ function DashboardContent() {
           {isFinanceView && (
             <Select value={String(fyStart)} onValueChange={(v) => setFyStart(Number(v))}>
               <SelectTrigger className="w-[130px] bg-card">
-                <SelectValue />
+                <SelectValue>{(v) => fyLabel(Number(v))}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {fyOptions.map((y) => (
@@ -410,7 +415,7 @@ function DashboardContent() {
               {isAdminView && (
                 <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
                   <StatCard icon={Users} label="Present Today" value={adminStats.presentToday} accent="emerald" href="/attendance" />
-                  <StatCard icon={UserX} label="Absent Today" value={adminStats.absentToday} accent="rose" href="/attendance" />
+                  <StatCard icon={UserX} label="Not Checked In" value={adminStats.absentToday} accent="rose" href="/attendance" />
                   <StatCard icon={CalendarClock} label="Pending Leaves" value={adminStats.pendingLeaves} accent="amber" href="/leave" />
                   <StatCard icon={Smartphone} label="Pending Devices" value={adminStats.pendingDevices} accent="sky" href="/devices" />
                 </div>

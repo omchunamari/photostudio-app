@@ -68,6 +68,12 @@ export async function getCompOffHistoryForEmployee(uid) {
 }
 
 export async function decideCompOffRequest(requestId, decision, decidedByUid, request) {
+  // Only a pending request can be decided — approving twice used to credit
+  // the paid-leave balance twice.
+  const current = await getDoc(doc(db, "compOffRequests", requestId));
+  if (!current.exists()) throw new Error("Comp off request not found.");
+  if (current.data().status !== "pending") throw new Error(`This request is already ${current.data().status}.`);
+
   await updateDoc(doc(db, "compOffRequests", requestId), {
     status: decision,
     decidedAt: new Date().toISOString(),

@@ -71,6 +71,13 @@ export async function POST(request) {
       return NextResponse.json({ error: "Employee not found" }, { status: 404 });
     }
 
+    if (targetUser.data().role === "super_admin" && callerRole !== "super_admin") {
+      return NextResponse.json({ error: "Only a super admin can delete a super admin" }, { status: 403 });
+    }
+    if (uid === callerUid) {
+      return NextResponse.json({ error: "You can't delete your own account" }, { status: 400 });
+    }
+
     if (targetUser.data().role === "super_admin") {
       const superAdminsSnap = await adminDb.collection("users").where("role", "==", "super_admin").get();
       if (superAdminsSnap.size <= 1) {

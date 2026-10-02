@@ -1,6 +1,8 @@
 import { WEEKLY_OFF_DAY } from "@/lib/constants/attendance";
+import { isHolidayDate } from "@/lib/holidays";
 import { DEFAULT_ANNUAL_PAID_LEAVES } from "./constants";
 import { round2 } from "./calc";
+import { getISTDateStr } from "@/lib/dateIST";
 
 export function daysInMonth(ym) {
   const [y, m] = ym.split("-").map(Number);
@@ -28,12 +30,13 @@ function eachDate(startStr, endStr, fn) {
  * countLeaveDays() in leave.js does) and attendance rows auto-marked as
  * `auto_leave` by the daily cron. A date is only counted once.
  */
-export function leaveDateSet(approvedRequests = [], autoLeaveRecords = []) {
+export function leaveDateSet(approvedRequests = [], autoLeaveRecords = [], holidays = []) {
   const set = new Set();
   approvedRequests.forEach((r) => {
     if (r.status && r.status !== "approved") return;
     eachDate(r.startDate, r.endDate, (d, dow) => {
-      if (dow !== WEEKLY_OFF_DAY) set.add(d);
+      // Org holidays inside a leave range don't cost leave (same rule as leave.js).
+      if (dow !== WEEKLY_OFF_DAY && !isHolidayDate(d, holidays)) set.add(d);
     });
   });
   autoLeaveRecords.forEach((a) => {
@@ -84,21 +87,27 @@ export function computePayslip({
   otherEarnings = 0,
   otherDeduction = 0,
   advanceRecovery = 0,
+  joinedOn = null, // employees who joined during this month are paid from that day
 }) {
   const salary = Number(monthlySalary) || 0;
   const days = daysInMonth(ym);
-  const lop = Math.max(0, Math.min(days, (Number(lopDays) || 0) + (Number(lopAdjust) || 0)));
+  const joined = joinedOn ? String(joinedOn).slice(0, 10) : "";
+  const notEmployedDays = joined.startsWith(ym) ? Number(joined.slice(8, 10)) - 1 : 0;
+  const lop = Math.max(0, Math.min(days - notEmployedDays, (Number(lopDays) || 0) + (Number(lopAdjust) || 0)));
   const perDay = salary / days;
   const lopDeduction = round2(perDay * lop);
+  const notEmployedDeduction = round2(perDay * notEmployedDays);
   const earn = Number(otherEarnings) || 0;
   const other = Number(otherDeduction) || 0;
   const adv = Number(advanceRecovery) || 0;
   const gross = round2(salary + earn);
-  const totalDeductions = round2(lopDeduction + other + adv);
+  const totalDeductions = round2(lopDeduction + notEmployedDeduction + other + adv);
   return {
     salary,
     daysInMonth: days,
-    paidDays: round2(days - lop),
+    paidDays: round2(days - lop - notEmployedDays),
+    notEmployedDays,
+    notEmployedDeduction,
     leaveDays: Number(leaveDays) || 0,
     lopDays: lop,
     lopDeduction,
@@ -112,7 +121,7 @@ export function computePayslip({
 }
 
 /** Next increment reminder helpers. */
-export function daysUntil(dateStr, today = new Date().toISOString().slice(0, 10)) {
+export function daysUntil(dateStr, today = getISTDateStr()) {
   if (!dateStr) return null;
   const a = new Date(`${today}T00:00:00Z`);
   const b = new Date(`${String(dateStr).slice(0, 10)}T00:00:00Z`);

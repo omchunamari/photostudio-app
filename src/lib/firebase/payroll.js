@@ -15,6 +15,7 @@ import { buildTransaction, newId } from "./finance";
 import { CAT_ADVANCE, CAT_SALARY, DEFAULT_ANNUAL_PAID_LEAVES } from "@/lib/finance/constants";
 import { addMonthsISO } from "@/lib/finance/payrollCalc";
 import { round2 } from "@/lib/finance/calc";
+import { getISTDateStr } from "@/lib/dateIST";
 
 const now = () => new Date().toISOString();
 
@@ -68,7 +69,7 @@ export async function applyIncrement(uid, current, { mode, value, effectiveDate,
   if (!oldSalary) throw new Error("Set the current salary first");
   const amount = mode === "percent" ? round2((oldSalary * v) / 100) : v;
   const newSalary = round2(oldSalary + amount);
-  const date = effectiveDate || now().slice(0, 10);
+  const date = effectiveDate || getISTDateStr();
   const entry = {
     date,
     oldSalary,
@@ -112,7 +113,7 @@ export async function createEmployeeAdvance(data, by) {
   if (!data.accountId) throw new Error("Select an account");
   const id = newId("employeeAdvances");
   const txId = newId("financeTransactions");
-  const date = data.date || now().slice(0, 10);
+  const date = data.date || getISTDateStr();
   const batch = writeBatch(db);
   batch.set(doc(db, "employeeAdvances", id), {
     employeeUid: data.employeeUid,
@@ -209,7 +210,7 @@ export async function paySalary(payroll, { accountId, date }, by) {
   if (!fresh.exists()) throw new Error("Payroll not found");
   if (fresh.data().status === "paid") throw new Error("This salary is already paid");
 
-  const payDate = date || now().slice(0, 10);
+  const payDate = date || getISTDateStr();
   const txId = newId("financeTransactions");
   const recoveries = payroll.recoveries || [];
   const batch = writeBatch(db);

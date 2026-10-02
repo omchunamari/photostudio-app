@@ -4,6 +4,7 @@ import { buildTransaction, newId } from "./finance";
 import { CAT_EMI, CAT_LOAN_RECEIPT } from "@/lib/finance/constants";
 import { splitEmi, nextEmiDate } from "@/lib/finance/loanCalc";
 import { round2 } from "@/lib/finance/calc";
+import { getISTDateStr } from "@/lib/dateIST";
 
 const now = () => new Date().toISOString();
 
@@ -87,7 +88,7 @@ export async function payEmi(loan, { accountId, date }, by) {
     ...buildTransaction(
       {
         kind: "expense",
-        date: date || now().slice(0, 10),
+        date: date || getISTDateStr(),
         amount: total,
         category: CAT_EMI,
         accountId,

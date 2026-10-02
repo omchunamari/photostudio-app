@@ -92,6 +92,7 @@ import StatusBadge from "@/components/ui/status-badge";
 import { formatDateIST } from "@/lib/dateIST";
 import { toast } from "sonner";
 import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown, HardDrive, FileText, Wallet, UserSquare2 } from "lucide-react";
+import { getISTDateStr } from "@/lib/dateIST";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
@@ -307,7 +308,7 @@ function ProjectDetailContent() {
   const [savingInvoice, setSavingInvoice] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState({
     invoiceNumber: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: getISTDateStr(),
     amount: "",
     status: "unpaid",
     accountId: "",
@@ -323,7 +324,7 @@ function ProjectDetailContent() {
     amount: "",
     description: "",
     accountId: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: getISTDateStr(),
   });
 
   async function loadData() {
@@ -670,7 +671,7 @@ function ProjectDetailContent() {
       const nextNumber = await getNextInvoiceNumber();
       setInvoiceForm({
         invoiceNumber: nextNumber,
-        date: new Date().toISOString().slice(0, 10),
+        date: getISTDateStr(),
         amount: "",
         status: "unpaid",
         note: "",
@@ -726,7 +727,7 @@ function ProjectDetailContent() {
     if (inv.status !== "paid" && financeAccounts.length > 0) {
       setPayInvoice(inv);
       setPayAccount("");
-      setPayDate(new Date().toISOString().slice(0, 10));
+      setPayDate(getISTDateStr());
       return;
     }
     return toggleInvoiceStatus(inv);
@@ -742,7 +743,7 @@ function ProjectDetailContent() {
     const nextStatus = inv.status === "paid" ? "unpaid" : "paid";
     // Mirror the paidAt stamp setInvoiceStatus writes, so the optimistic
     // local row matches what's in Firestore without a refetch.
-    const nextPaidAt = nextStatus === "paid" ? paid.paidAt || new Date().toISOString().slice(0, 10) : null;
+    const nextPaidAt = nextStatus === "paid" ? paid.paidAt || getISTDateStr() : null;
     try {
       await setInvoiceStatus(inv.id, nextStatus, nextPaidAt, paid.accountId);
       setInvoices((prev) =>
@@ -798,7 +799,7 @@ function ProjectDetailContent() {
         amount: "",
         description: "",
         accountId: "",
-        date: new Date().toISOString().slice(0, 10),
+        date: getISTDateStr(),
       });
       loadData();
     } catch (err) {

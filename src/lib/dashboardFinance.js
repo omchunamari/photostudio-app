@@ -1,6 +1,7 @@
 import { getAllProjects } from "@/lib/firebase/projects";
 import { getAllQuotations } from "@/lib/firebase/quotations";
 import { getAllInvoices, sumReceived, collectionDate } from "@/lib/firebase/invoices";
+import { getTransactions } from "@/lib/firebase/finance";
 
 // Who can see the dashboard finance widgets — mirrors isProjectOps() in
 // firestore.rules (admin/PM only). Never fire these queries for anyone
@@ -78,12 +79,21 @@ function fyMonthKeys(startYear) {
  *   monthly: [{ label, amount }],   // 12 months of the selected FY, Apr→Mar
  * }
  */
-export async function loadFinanceOverview(startYear) {
-  const [projects, quotations, invoices] = await Promise.all([
+export async function loadFinanceOverview(startYear, { includeLedger = false } = {}) {
+  const [projects, quotations, rawInvoices, ledger] = await Promise.all([
     getAllProjects(),
     getAllQuotations(),
     getAllInvoices(),
+    // Client payments entered in Finance → Transactions live in the ledger,
+    // not in invoices. Only admin/super_admin can read it (see firestore.rules).
+    includeLedger ? getTransactions().catch(() => []) : Promise.resolve([]),
   ]);
+  // Ledger project income, shaped like paid invoices so every figure below
+  // counts it exactly the same way.
+  const ledgerIncome = ledger
+    .filter((t) => t.kind === "income" && t.projectId)
+    .map((t) => ({ projectId: t.projectId, status: "paid", amount: Number(t.amount) || 0, paidAt: t.date, date: t.date }));
+  const invoices = [...rawInvoices, ...ledgerIncome];
 
   const quotesById = Object.fromEntries(quotations.map((q) => [q.id, q]));
   const fyProjects = projects.filter((p) => inFY(p.createdAt, startYear));

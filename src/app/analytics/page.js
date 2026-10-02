@@ -65,6 +65,7 @@ import {
   Target,
   Clapperboard,
 } from "lucide-react";
+import { getISTDateStr } from "@/lib/dateIST";
 
 // Financial data — admin/PM only, mirrors the isProjectOps() boundary on
 // leads/quotations/expenses in firestore.rules. Not shown to HR, leaders,
@@ -872,7 +873,7 @@ function SalesFunnelTab({ leads, quotations }) {
 // the isOverdue() helper that used to live in postProduction.js.
 function isDeliverableOverdue(d) {
   if (!d.deadline || d.status === "Delivered") return false;
-  return d.deadline < new Date().toISOString().split("T")[0];
+  return d.deadline < getISTDateStr();
 }
 
 function PostProductionTab({ tasks, employees }) {

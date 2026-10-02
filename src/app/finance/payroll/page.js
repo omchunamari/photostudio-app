@@ -20,6 +20,7 @@ import { downloadPayslipPdf } from "@/lib/finance/payslipPdf";
 import { DEFAULT_ANNUAL_PAID_LEAVES } from "@/lib/finance/constants";
 import { inr, round2 } from "@/lib/finance/calc";
 import { getISTDateStr } from "@/lib/dateIST";
+import { getOrgHolidays } from "@/lib/firebase/holidays";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,11 @@ function Content() {
   const [payTarget, setPayTarget] = useState(null); // a row, or "ALL"
   const [payForm, setPayForm] = useState({ accountId: "", date: getISTDateStr() });
   const [busy, setBusy] = useState(false);
+  const [orgHolidays, setOrgHolidays] = useState([]);
+
+  useEffect(() => {
+    getOrgHolidays().then(setOrgHolidays).catch(() => {});
+  }, []);
 
   const year = month.slice(0, 4);
   useEffect(() => {
@@ -77,7 +83,8 @@ function Content() {
         if (!fin?.monthlySalary) return { emp: e, payroll: null, noSalary: true };
         const dates = leaveDateSet(
           leaveSrc.approved.filter((r) => r.employeeUid === e.uid),
-          leaveSrc.auto.filter((r) => r.employeeUid === e.uid)
+          leaveSrc.auto.filter((r) => r.employeeUid === e.uid),
+          orgHolidays
         );
         const { leaveDays, lopDays } = computeLeaveAndLop(month, dates, fin.annualPaidLeaves ?? DEFAULT_ANNUAL_PAID_LEAVES);
         const adj = adjust[e.uid] || {};
@@ -109,6 +116,7 @@ function Content() {
           otherEarnings: adj.otherEarnings,
           otherDeduction: adj.otherDeduction,
           advanceRecovery: capped,
+          joinedOn: e.joiningDate || null,
         });
         const payroll = {
           id: payrollId(month, e.uid),
@@ -125,7 +133,7 @@ function Content() {
         };
         return { emp: e, payroll, saved: !!existing };
       });
-  }, [data.employees, data.employeeFinance, data.payrolls, data.advances, leaveSrc, month, adjust]);
+  }, [data.employees, data.employeeFinance, data.payrolls, data.advances, leaveSrc, month, adjust, orgHolidays]);
 
   // Former staff: deactivated / resigned / deleted people who have a saved
   // payroll for this month. Shown from the saved snapshot — never recomputed.
