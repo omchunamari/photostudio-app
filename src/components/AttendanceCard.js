@@ -30,7 +30,7 @@ export default function AttendanceCard() {
 
   const isSunday = new Date().getDay() === 0;
 
-  async function loadRecord() {
+  async function loadRecord({ notify = false } = {}) {
     const [data, report] = await Promise.all([
       getTodayAttendance(user.uid),
       getTodayReport(user.uid),
@@ -38,6 +38,9 @@ export default function AttendanceCard() {
     setRecord(data);
     setHasReport(!!report);
     setLoading(false);
+    // Lets other widgets on the page (e.g. "My attendance") refresh after a
+    // check-in / check-out without a page reload.
+    if (notify) window.dispatchEvent(new Event("attendanceChanged"));
   }
 
   useEffect(() => {
@@ -89,7 +92,7 @@ export default function AttendanceCard() {
     try {
       await checkIn(user.uid, user.name, user.department);
       toast.success("Checked in successfully");
-      loadRecord();
+      loadRecord({ notify: true });
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -102,7 +105,7 @@ export default function AttendanceCard() {
     try {
       await checkOut(user.uid);
       toast.success("Checked out successfully");
-      loadRecord();
+      loadRecord({ notify: true });
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -120,7 +123,7 @@ export default function AttendanceCard() {
         await startBreak(user.uid);
         toast.success("Break started");
       }
-      loadRecord();
+      loadRecord({ notify: true });
     } catch (err) {
       toast.error(err.message);
     } finally {

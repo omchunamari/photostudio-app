@@ -6,6 +6,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import DeviceGate from "@/components/DeviceGate";
 import AppShell from "@/components/AppShell";
 import AttendanceCard from "@/components/AttendanceCard";
+import { EmployeeReportForm } from "@/components/DailyReportPanel";
 import { MonthCalendar, MonthNav, CalendarLegend, monthName } from "@/components/attendance/MonthCalendar";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -156,12 +157,22 @@ function MyMonth({ uid, holidays, today, joiningDate }) {
   const [leaves, setLeaves] = useState([]);
 
   useEffect(() => {
-    Promise.all([getEmployeeAttendanceHistory(uid), getLeaveHistoryForEmployee(uid)])
-      .then(([h, l]) => {
-        setHistory(h);
-        setLeaves(l);
-      })
-      .catch(() => setHistory([]));
+    let live = true;
+    const load = () =>
+      Promise.all([getEmployeeAttendanceHistory(uid), getLeaveHistoryForEmployee(uid)])
+        .then(([h, l]) => {
+          if (!live) return;
+          setHistory(h);
+          setLeaves(l);
+        })
+        .catch(() => live && setHistory([]));
+    load();
+    // Refresh when the check-in card on this page checks in / out.
+    window.addEventListener("attendanceChanged", load);
+    return () => {
+      live = false;
+      window.removeEventListener("attendanceChanged", load);
+    };
   }, [uid]);
 
   const cal = useMemo(() => monthCalendar(ym.y, ym.m, holidays, today), [ym, holidays, today]);
@@ -403,9 +414,11 @@ function AttendanceContent() {
         </div>
 
         {marksAttendance && (
-          <div className="mb-8 grid gap-4 lg:grid-cols-2">
-            <div>
+          <div className="mb-8 grid items-start gap-4 lg:grid-cols-2">
+            <div className="flex flex-col gap-4">
               <AttendanceCard />
+              {/* Today's daily report — check-out is blocked until it's in. */}
+              <EmployeeReportForm />
             </div>
             <MyMonth uid={user.uid} holidays={orgHolidays} today={today} joiningDate={user.joiningDate || user.createdAt || null} />
           </div>
