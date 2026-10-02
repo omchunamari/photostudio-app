@@ -10,7 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { deleteTransaction, markPayablePaid, setLegacyAccount } from "@/lib/firebase/finance";
 import { deleteExpense } from "@/lib/firebase/expenses";
-import { suggestedFreelancerPayouts } from "@/lib/finance/payouts";
+import FreelancerPayouts from "@/components/finance/FreelancerPayouts";
 import { filterTransactions, inr } from "@/lib/finance/calc";
 import { KIND_LABELS } from "@/lib/finance/constants";
 import { formatDateIST } from "@/lib/dateIST";
@@ -75,11 +75,6 @@ function Content() {
     }
     return [...list].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [data.all, filters]);
-
-  const payouts = useMemo(
-    () => suggestedFreelancerPayouts(data.events, data.freelancers, data.all),
-    [data.events, data.freelancers, data.all]
-  );
 
   const totalIn = rows.filter((t) => t.kind === "income").reduce((s, t) => s + t.amount, 0);
   const totalOut = rows.filter((t) => t.kind === "expense").reduce((s, t) => s + t.amount, 0);
@@ -210,48 +205,7 @@ function Content() {
         </>
       }
     >
-      {payouts.length > 0 && (
-        <Card className="mb-4 border-warning/30 bg-warning/5">
-          <CardContent className="p-4">
-            <p className="mb-2 text-sm font-medium text-foreground">Freelancer payouts due ({payouts.length})</p>
-            <div className="flex flex-col gap-2">
-              {payouts.map((s) => (
-                <div key={s.key} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card p-2 text-sm">
-                  <span>
-                    <span className="font-medium">{s.personName}</span>{" "}
-                    <span className="text-muted-foreground">
-                      · {s.projectName} · {s.days} day{s.days > 1 ? "s" : ""} @ {inr(s.dayRate)} · <b>{inr(s.amount)}</b> due
-                      {s.alreadyPaid > 0 && ` (${inr(s.alreadyPaid)} already paid)`}
-                    </span>
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setDialog({
-                        open: true,
-                        initial: {
-                          kind: "expense",
-                          projectId: s.projectId,
-                          personUid: s.personUid,
-                          personType: "freelancer",
-                          category: "Freelancer",
-                          amount: s.amount,
-                          description: s.alreadyPaid
-                            ? `Additional payout · ${s.days} total days (${inr(s.alreadyPaid)} already paid)`
-                            : `${s.days} shoot day${s.days > 1 ? "s" : ""} @ ${inr(s.dayRate)}/day`,
-                        },
-                      })
-                    }
-                  >
-                    Pay
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <FreelancerPayouts data={data} onPay={(preset) => setDialog({ open: true, initial: preset })} />
 
       {/* Summary of what the current filters show */}
       <div className="mb-3 grid grid-cols-3 gap-2.5 sm:gap-3">

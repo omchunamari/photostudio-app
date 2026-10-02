@@ -3,48 +3,91 @@ import { plExpense } from "./calc";
 const FREELANCER_CATEGORIES = ["Freelancer", "Freelancer Payout"];
 
 /**
- * Freelancer payouts still due. For every freelancer on an event team it
- * sums dayRate x shoot days per (project, person), then nets off whatever has
- * already been paid — ledger rows and older project-page expenses alike — so
- * only the remaining balance is suggested. Same logic the Analytics Expenses
- * tab used before it moved to Finance. Uses the rate set at assignment time
- * (m.dayRate), falling back to the freelancer profile's dayRate.
+ * Freelancer payouts, grouped person → project → event.
+ *
+ * Earned: for every freelancer on an event team, dayRate × shoot days (the rate
+ * set at assignment time, falling back to the freelancer profile's dayRate).
+ * Paid: every Freelancer-category expense tagged to that person on that project
+ * — ledger rows and older project-page expenses alike.
+ *
+ * Payments are recorded per project, not per event, so within a project they are
+ * applied to events oldest-first. That gives each event a Paid / Partly paid /
+ * Pending status that always adds up to the project's totals.
  */
-export function suggestedFreelancerPayouts(events, freelancers, rows) {
-  const logged = {};
+export function freelancerPayoutsByPerson(events, freelancers, rows) {
+  const paidByKey = {};
+  const paymentsByKey = {};
   rows.forEach((t) => {
     if (t.personType !== "freelancer" || !t.projectId || !FREELANCER_CATEGORIES.includes(t.category)) return;
+    if (t.status === "pending") return; // an unpaid bill isn't a payment
     const key = `${t.projectId}:${t.personUid}`;
-    logged[key] = (logged[key] || 0) + plExpense(t);
+    paidByKey[key] = (paidByKey[key] || 0) + plExpense(t);
+    (paymentsByKey[key] ||= []).push(t);
   });
 
-  const byKey = {};
+  const people = new Map();
   events.forEach((ev) => {
     (ev.team || []).forEach((m) => {
       if (m.type !== "freelancer") return;
       const fl = freelancers.find((f) => f.id === m.uid);
-      const rate = m.dayRate || fl?.dayRate || 0;
+      const rate = Number(m.dayRate || fl?.dayRate || 0);
       if (!rate) return;
-      const key = `${ev.projectId}:${m.uid}`;
-      if (!byKey[key]) {
-        byKey[key] = { key, projectId: ev.projectId, projectName: ev.projectName, personUid: m.uid, personName: m.name, days: 0, total: 0, rates: new Set() };
+      const days = Number(ev.shootDays) || 1;
+      if (!people.has(m.uid)) people.set(m.uid, { personUid: m.uid, personName: m.name || fl?.name || "Freelancer", projects: new Map() });
+      const person = people.get(m.uid);
+      if (!person.projects.has(ev.projectId)) {
+        person.projects.set(ev.projectId, { projectId: ev.projectId, projectName: ev.projectName || "Project", events: [] });
       }
-      const days = ev.shootDays || 1;
-      byKey[key].days += days;
-      byKey[key].total += days * rate;
-      byKey[key].rates.add(rate);
+      person.projects.get(ev.projectId).events.push({
+        eventId: ev.id,
+        eventName: ev.eventName || "Event",
+        date: ev.eventStartDate || "",
+        days,
+        rate,
+        amount: days * rate,
+      });
     });
   });
 
-  return Object.values(byKey)
-    .map((r) => {
-      const alreadyPaid = logged[r.key] || 0;
+  return [...people.values()]
+    .map((person) => {
+      const projects = [...person.projects.values()].map((p) => {
+        const key = `${p.projectId}:${person.personUid}`;
+        const paid = paidByKey[key] || 0;
+        let left = paid;
+        const evs = p.events
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .map((e) => {
+            const applied = Math.min(left, e.amount);
+            left -= applied;
+            return { ...e, paid: applied, due: e.amount - applied, status: applied >= e.amount ? "paid" : applied > 0 ? "partial" : "pending" };
+          });
+        const earned = evs.reduce((s, e) => s + e.amount, 0);
+        const due = Math.max(0, earned - paid);
+        return {
+          ...p,
+          events: evs,
+          earned,
+          paid,
+          due,
+          payments: (paymentsByKey[key] || []).sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+          status: due <= 0 ? "paid" : paid > 0 ? "partial" : "pending",
+          lastDate: evs.length ? evs[evs.length - 1].date : "",
+        };
+      });
+      projects.sort((a, b) => b.due - a.due || b.lastDate.localeCompare(a.lastDate));
+      const earned = projects.reduce((s, p) => s + p.earned, 0);
+      const paid = projects.reduce((s, p) => s + Math.min(p.paid, p.earned), 0);
+      const due = projects.reduce((s, p) => s + p.due, 0);
       return {
-        ...r,
-        alreadyPaid,
-        amount: r.total - alreadyPaid,
-        dayRate: r.rates.size === 1 ? [...r.rates][0] : Math.round(r.total / r.days),
+        ...person,
+        projects,
+        earned,
+        paid,
+        due,
+        eventCount: projects.reduce((s, p) => s + p.events.length, 0),
+        pendingProjects: projects.filter((p) => p.due > 0).length,
       };
     })
-    .filter((r) => r.amount > 0);
+    .sort((a, b) => b.due - a.due || (a.personName || "").localeCompare(b.personName || ""));
 }
