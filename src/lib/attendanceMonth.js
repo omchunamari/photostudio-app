@@ -5,6 +5,7 @@ import { WEEKLY_OFF_DAY } from "@/lib/constants/attendance";
 import { getISTDayFromDateStr } from "@/lib/dateIST";
 import { getHolidayForDate } from "@/lib/holidays";
 
+// "late" isn't produced by check-in today; kept here so any such record still counts as present.
 export const PRESENT_STATUSES = ["present", "late"];
 export const LEAVE_STATUSES = ["auto_leave", "on_leave"];
 
@@ -44,7 +45,7 @@ function leaveCovers(requests, date) {
 
 /**
  * One employee's month. Each day gets a `kind`:
- *   present | late | leave | absent | today (not in yet) | off | holiday | future
+ *   present | leave | absent | today (not in yet) | off | holiday | future
  * `records` are that employee's attendance docs; `leaves` their leave requests.
  *
  * Approved leave matters here because the cron does NOT write an attendance
@@ -54,7 +55,6 @@ function leaveCovers(requests, date) {
 export function employeeMonth(calendar, records, leaves, today) {
   const byDate = new Map(records.map((r) => [r.date, r]));
   let present = 0;
-  let late = 0;
   let leave = 0;
   let absent = 0;
   let extraDays = 0; // worked on a Sunday / holiday
@@ -65,11 +65,9 @@ export function employeeMonth(calendar, records, leaves, today) {
     const rec = byDate.get(d.date);
     let kind;
     if (rec && PRESENT_STATUSES.includes(rec.status)) {
-      kind = rec.status === "late" ? "late" : "present";
-      if (d.working) {
-        present++;
-        if (rec.status === "late") late++;
-      } else extraDays++;
+      kind = "present";
+      if (d.working) present++;
+      else extraDays++;
       if (rec.totalWorkingMs > 0) {
         workedMs += rec.totalWorkingMs;
         workedCount++;
@@ -97,7 +95,6 @@ export function employeeMonth(calendar, records, leaves, today) {
   return {
     days,
     present,
-    late,
     leave,
     absent,
     extraDays,
@@ -108,7 +105,6 @@ export function employeeMonth(calendar, records, leaves, today) {
 
 export const DAY_KIND_STYLES = {
   present: { cell: "bg-success/15 text-success ring-success/30", dot: "bg-success", label: "Present" },
-  late: { cell: "bg-warning/15 text-warning ring-warning/30", dot: "bg-warning", label: "Late" },
   leave: { cell: "bg-sky-500/15 text-sky-700 ring-sky-500/30 dark:text-sky-300", dot: "bg-sky-500", label: "Leave" },
   absent: { cell: "bg-destructive/15 text-destructive ring-destructive/30", dot: "bg-destructive", label: "Absent" },
   today: { cell: "bg-card text-foreground ring-foreground/40", dot: "bg-foreground/40", label: "Today" },

@@ -193,7 +193,7 @@ function MyMonth({ uid, holidays, today }) {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
                 ["Working days", cal.workingDays, isCurrent ? `${cal.workingDaysSoFar} so far` : `${cal.offDays} off`],
-                ["Present", mine.present, mine.late ? `${mine.late} late` : mine.attendancePct != null ? `${mine.attendancePct}%` : ""],
+                ["Present", mine.present, mine.attendancePct != null ? `${mine.attendancePct}%` : ""],
                 ["Leave", mine.leave, ""],
                 ["Absent", mine.absent, ""],
               ].map(([label, value, sub]) => (
@@ -351,14 +351,13 @@ function AttendanceContent() {
   }
 
   function exportMonthSummary() {
-    const headers = ["Employee", "Department", "Working Days", "Working Days So Far", "Present Days", "Late", "Leave Days", "Absent Days", "Worked On Off Days", "Attendance %", "Avg Working Hours"];
+    const headers = ["Employee", "Department", "Working Days", "Working Days So Far", "Present Days", "Leave Days", "Absent Days", "Worked On Off Days", "Attendance %", "Avg Working Hours"];
     const rows = monthRows.map((r) => [
       r.name || "",
       r.department || "",
       cal.workingDays,
       cal.workingDaysSoFar,
       r.present,
-      r.late,
       r.leave,
       r.absent,
       r.extraDays,
@@ -612,7 +611,7 @@ function AttendanceContent() {
                                 </div>
                               </div>
                               <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                <span>Leave {r.leave} · Absent {r.absent}{r.late ? ` · Late ${r.late}` : ""}</span>
+                                <span>Leave {r.leave} · Absent {r.absent}</span>
                                 {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </div>
                             </button>
@@ -636,7 +635,6 @@ function AttendanceContent() {
                               <TableHead>Employee</TableHead>
                               <TableHead className="text-right">Present / Working</TableHead>
                               <TableHead>Attendance</TableHead>
-                              <TableHead className="text-right">Late</TableHead>
                               <TableHead className="text-right">Leave</TableHead>
                               <TableHead className="text-right">Absent</TableHead>
                               <TableHead className="text-right">Avg hours</TableHead>
@@ -663,7 +661,6 @@ function AttendanceContent() {
                                     {isCurrentMonth && <p className="text-[11px] text-muted-foreground">{cal.workingDaysSoFar} so far</p>}
                                   </TableCell>
                                   <TableCell><PctBar pct={r.attendancePct} /></TableCell>
-                                  <TableCell className={`text-right tabular-nums ${r.late ? "text-warning" : "text-muted-foreground"}`}>{r.late}</TableCell>
                                   <TableCell className="text-right tabular-nums">{r.leave}</TableCell>
                                   <TableCell className={`text-right tabular-nums ${r.absent ? "font-medium text-destructive" : "text-muted-foreground"}`}>{r.absent}</TableCell>
                                   <TableCell className="text-right">{formatDuration(r.avgWorkingMs)}</TableCell>
@@ -671,7 +668,7 @@ function AttendanceContent() {
                                 </TableRow>,
                                 open && (
                                   <TableRow key={`${r.uid}-detail`} className="hover:bg-transparent">
-                                    <TableCell colSpan={8} className="bg-muted/30 p-4">
+                                    <TableCell colSpan={7} className="bg-muted/30 p-4">
                                       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
                                         <div className="flex flex-col gap-2">
                                           <MonthCalendar days={r.days} compact />

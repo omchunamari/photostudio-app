@@ -79,7 +79,7 @@ export function MonthCalendar({ days, compact = false }) {
   );
 }
 
-export function CalendarLegend({ kinds = ["present", "late", "leave", "absent", "holiday", "off"] }) {
+export function CalendarLegend({ kinds = ["present", "leave", "absent", "holiday", "off"] }) {
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
       {kinds.map((k) => (
