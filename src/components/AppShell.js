@@ -47,7 +47,9 @@ const NAV_ITEMS = [
   { label: "Post-Production", href: "/post-production", icon: Clapperboard, roles: null },
   { label: "Calendar", href: "/calendar", icon: CalendarRange, roles: null },
   { label: "Leave", href: "/leave", icon: Calendar, roles: null },
-  { label: "Attendance", href: "/attendance", icon: Clock, roles: ["super_admin", "admin", "hr"] },
+  // Everyone: employees get their own check-in + "My attendance" month view;
+  // HR / super_admin also see the team section on the same page.
+  { label: "Attendance", href: "/attendance", icon: Clock, roles: null },
   { label: "Employees", href: "/employees", icon: Users, roles: ["super_admin", "admin", "hr"] },
   { label: "Freelancers", href: "/freelancers", icon: UserRound, roles: ["super_admin", "admin", "project_manager"] },
   { label: "Finance", href: "/finance", icon: Wallet, roles: ["super_admin", "admin", "accountant"] },
