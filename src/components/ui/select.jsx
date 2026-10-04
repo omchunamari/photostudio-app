@@ -4,9 +4,110 @@ import * as React from "react"
 import { Select as SelectPrimitive } from "@base-ui/react/select"
 
 import { cn } from "@/lib/utils"
-import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
+import { ChevronDownIcon, CheckIcon, ChevronUpIcon, Search } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+// Tracks open/closed so the search box can clear and take focus on every open
+// (the popup stays mounted between opens). Forwards everything to the real Root.
+const SelectOpenContext = React.createContext(false)
+
+function Select({ onOpenChange, open: openProp, defaultOpen, ...props }) {
+  const [openState, setOpenState] = React.useState(defaultOpen ?? false)
+  const open = openProp ?? openState
+  return (
+    <SelectOpenContext.Provider value={open}>
+      <SelectPrimitive.Root
+        {...props}
+        {...(openProp !== undefined ? { open: openProp } : {})}
+        defaultOpen={defaultOpen}
+        onOpenChange={(next, details) => {
+          setOpenState(next)
+          onOpenChange?.(next, details)
+        }}
+      />
+    </SelectOpenContext.Provider>
+  )
+}
+
+/*
+ * Type-to-search for every dropdown in the app.
+ *
+ * SelectContent renders a search box above the options and shares the typed
+ * text through this context; each SelectItem hides itself when its text (and
+ * value) doesn't contain it. Existing <Select> call sites need no changes.
+ * Pass searchable={false} to SelectContent to turn the box off for one menu.
+ */
+const SelectSearchContext = React.createContext("")
+
+// Plain text of an item's children, so "Wedding" or <>Wedding <b>(3)</b></> both match.
+function textOf(node) {
+  if (node == null || typeof node === "boolean") return ""
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join(" ")
+  if (React.isValidElement(node)) return textOf(node.props.children)
+  return ""
+}
+
+function itemMatches(props, term) {
+  if (!term) return true
+  const hay = `${textOf(props.children)} ${props.value ?? ""}`.toLowerCase()
+  return hay.includes(term)
+}
+
+// Counts how many SelectItems in a children tree match, for the "No matches" line.
+function countMatches(children, term) {
+  let n = 0
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return
+    if (child.type === SelectItem) {
+      if (itemMatches(child.props, term)) n++
+    } else if (child.props?.children) {
+      n += countMatches(child.props.children, term)
+    }
+  })
+  return n
+}
+
+function SearchableList({ children }) {
+  const open = React.useContext(SelectOpenContext)
+  const [query, setQuery] = React.useState("")
+  const inputRef = React.useRef(null)
+  const term = query.trim().toLowerCase()
+
+  React.useEffect(() => {
+    if (!open) return
+    // Every open starts with an empty search. The select also moves focus to the
+    // highlighted option as it opens, so take focus back for typing.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setQuery("")
+    const id = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [open])
+
+  const matches = term ? countMatches(children, term) : 1
+
+  return (
+    <SelectSearchContext.Provider value={term}>
+      <div className="sticky top-0 z-20 border-b border-border bg-popover p-1.5">
+        <Search className="pointer-events-none absolute top-1/2 left-3.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          // Let arrows / Enter / Escape / Tab reach the select for keyboard navigation;
+          // everything else is typing and must not trigger the select's own typeahead.
+          onKeyDown={(e) => {
+            if (!["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab"].includes(e.key)) e.stopPropagation()
+          }}
+          placeholder="Type to search..."
+          aria-label="Search options"
+          className="h-8 w-full rounded-sm bg-transparent pr-2 pl-7 text-sm outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      <SelectPrimitive.List>{children}</SelectPrimitive.List>
+      {matches === 0 && <p className="px-2 py-3 text-center text-xs text-muted-foreground">No matches</p>}
+    </SelectSearchContext.Provider>
+  )
+}
 
 function SelectGroup({
   className,
@@ -63,7 +164,8 @@ function SelectContent({
   sideOffset = 4,
   align = "center",
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  alignItemWithTrigger = false,
+  searchable = true,
   ...props
 }) {
   return (
@@ -83,9 +185,15 @@ function SelectContent({
             className
           )}
           {...props}>
-          <SelectScrollUpButton />
-          <SelectPrimitive.List>{children}</SelectPrimitive.List>
-          <SelectScrollDownButton />
+          {searchable ? (
+            <SearchableList>{children}</SearchableList>
+          ) : (
+            <>
+              <SelectScrollUpButton />
+              <SelectPrimitive.List>{children}</SelectPrimitive.List>
+              <SelectScrollDownButton />
+            </>
+          )}
         </SelectPrimitive.Popup>
       </SelectPrimitive.Positioner>
     </SelectPrimitive.Portal>
@@ -109,6 +217,8 @@ function SelectItem({
   children,
   ...props
 }) {
+  const term = React.useContext(SelectSearchContext)
+  if (!itemMatches({ children, value: props.value }, term)) return null
   return (
     <SelectPrimitive.Item
       data-slot="select-item"

@@ -50,6 +50,8 @@ import {
   addCustomExpenseCategory,
   removeCustomExpenseCategory,
 } from "@/lib/firebase/expenses";
+import { getTransactionsForProject, getAccounts } from "@/lib/firebase/finance";
+import { plExpense, plIncome } from "@/lib/finance/calc";
 import { PROJECT_STATUSES } from "@/lib/constants/projects";
 import { PROJECT_TYPES } from "@/lib/constants/leads";
 import { isEventPast } from "@/lib/status";
@@ -90,6 +92,7 @@ import StatusBadge from "@/components/ui/status-badge";
 import { formatDateIST } from "@/lib/dateIST";
 import { toast } from "sonner";
 import { ArrowLeft, Plus, Trash2, Crown, X, ChevronDown, HardDrive, FileText, Wallet, UserSquare2 } from "lucide-react";
+import { getISTDateStr } from "@/lib/dateIST";
 
 const ADMIN_ROLES = ["super_admin", "admin", "project_manager"];
 
@@ -269,6 +272,12 @@ function ProjectDetailContent() {
   const [employees, setEmployees] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  // Finance-module ledger rows for this project (income / expenses entered in
+  // Finance). Only loaded for roles the ledger rules allow.
+  const [ledgerTxs, setLedgerTxs] = useState([]);
+  // Cash / bank accounts, so money entered here can be tied to the account it
+  // moved through (admin / super_admin only — same boundary as the ledger).
+  const [financeAccounts, setFinanceAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -299,9 +308,10 @@ function ProjectDetailContent() {
   const [savingInvoice, setSavingInvoice] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState({
     invoiceNumber: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: getISTDateStr(),
     amount: "",
     status: "unpaid",
+    accountId: "",
     note: "",
   });
 
@@ -313,7 +323,8 @@ function ProjectDetailContent() {
     category: MANUAL_EXPENSE_CATEGORIES[0],
     amount: "",
     description: "",
-    date: new Date().toISOString().slice(0, 10),
+    accountId: "",
+    date: getISTDateStr(),
   });
 
   async function loadData() {
@@ -371,6 +382,14 @@ function ProjectDetailContent() {
           setExpenseCategories(cats);
         } catch (err) {
           toast.error(`Failed loading financials: ${err.message}`);
+        }
+        if (["super_admin", "admin"].includes(user.role)) {
+          try {
+            setLedgerTxs(await getTransactionsForProject(id));
+            setFinanceAccounts((await getAccounts()).filter((a) => a.active !== false));
+          } catch (err) {
+            console.error("Finance ledger unavailable:", err);
+          }
         }
       }
     }
@@ -652,7 +671,7 @@ function ProjectDetailContent() {
       const nextNumber = await getNextInvoiceNumber();
       setInvoiceForm({
         invoiceNumber: nextNumber,
-        date: new Date().toISOString().slice(0, 10),
+        date: getISTDateStr(),
         amount: "",
         status: "unpaid",
         note: "",
@@ -682,6 +701,7 @@ function ProjectDetailContent() {
           date: invoiceForm.date,
           amount: invoiceForm.amount,
           status: invoiceForm.status,
+          accountId: invoiceForm.status === "paid" ? invoiceForm.accountId || null : null,
           note: invoiceForm.note,
         },
         user.uid,
@@ -697,15 +717,41 @@ function ProjectDetailContent() {
     }
   }
 
-  async function handleToggleInvoiceStatus(inv) {
+  // Marking an invoice paid asks where the money landed (when the user can see
+  // accounts), so the Cash/Bank balance moves at that moment, not later.
+  const [payInvoice, setPayInvoice] = useState(null);
+  const [payAccount, setPayAccount] = useState("");
+  const [payDate, setPayDate] = useState("");
+
+  function handleToggleInvoiceStatus(inv) {
+    if (inv.status !== "paid" && financeAccounts.length > 0) {
+      setPayInvoice(inv);
+      setPayAccount("");
+      setPayDate(getISTDateStr());
+      return;
+    }
+    return toggleInvoiceStatus(inv);
+  }
+
+  async function confirmInvoicePaid() {
+    const inv = payInvoice;
+    setPayInvoice(null);
+    await toggleInvoiceStatus(inv, { accountId: payAccount || null, paidAt: payDate });
+  }
+
+  async function toggleInvoiceStatus(inv, paid = {}) {
     const nextStatus = inv.status === "paid" ? "unpaid" : "paid";
     // Mirror the paidAt stamp setInvoiceStatus writes, so the optimistic
     // local row matches what's in Firestore without a refetch.
-    const nextPaidAt = nextStatus === "paid" ? new Date().toISOString().slice(0, 10) : null;
+    const nextPaidAt = nextStatus === "paid" ? paid.paidAt || getISTDateStr() : null;
     try {
-      await setInvoiceStatus(inv.id, nextStatus, nextPaidAt);
+      await setInvoiceStatus(inv.id, nextStatus, nextPaidAt, paid.accountId);
       setInvoices((prev) =>
-        prev.map((i) => (i.id === inv.id ? { ...i, status: nextStatus, paidAt: nextPaidAt } : i))
+        prev.map((i) =>
+          i.id === inv.id
+            ? { ...i, status: nextStatus, paidAt: nextPaidAt, accountId: nextStatus === "paid" ? paid.accountId ?? i.accountId ?? null : null }
+            : i
+        )
       );
       toast.success(nextStatus === "paid" ? "Marked as paid" : "Marked as unpaid");
     } catch (err) {
@@ -740,6 +786,7 @@ function ProjectDetailContent() {
           category: expenseForm.category,
           amount: expenseForm.amount,
           description: expenseForm.description,
+          accountId: expenseForm.accountId || null,
           date: expenseForm.date,
         },
         user.uid,
@@ -751,7 +798,8 @@ function ProjectDetailContent() {
         category: MANUAL_EXPENSE_CATEGORIES[0],
         amount: "",
         description: "",
-        date: new Date().toISOString().slice(0, 10),
+        accountId: "",
+        date: getISTDateStr(),
       });
       loadData();
     } catch (err) {
@@ -804,13 +852,17 @@ function ProjectDetailContent() {
 
   // --- Financial rollups ---
   const packageAmount = Number(project.quotationAmount) || 0;
-  const received = sumReceived(invoices);
+  // Received / expenses = the project's own invoices & expenses PLUS anything
+  // entered once in the Finance module — same numbers Finance reports show.
+  const ledgerReceived = ledgerTxs.reduce((sum, t) => sum + plIncome(t), 0);
+  const ledgerExpenses = ledgerTxs.reduce((sum, t) => sum + plExpense(t), 0);
+  const received = sumReceived(invoices) + ledgerReceived;
   const balanceDue = Math.max(packageAmount - received, 0);
   const receivedPct = packageAmount > 0 ? Math.round((received / packageAmount) * 100) : 0;
   const balancePct = packageAmount > 0 ? Math.round((balanceDue / packageAmount) * 100) : 0;
   const teamCost = events.reduce((sum, ev) => sum + sumEventTeamCost(ev.team), 0);
   const teamCostPct = packageAmount > 0 ? Math.round((teamCost / packageAmount) * 100) : 0;
-  const otherExpensesTotal = expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+  const otherExpensesTotal = expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0) + ledgerExpenses;
   const otherExpensesPct = packageAmount > 0 ? Math.round((otherExpensesTotal / packageAmount) * 100) : 0;
   const netProfit = packageAmount - teamCost - otherExpensesTotal;
   const marginPct = packageAmount > 0 ? Math.round((netProfit / packageAmount) * 100) : 0;
@@ -959,6 +1011,13 @@ function ProjectDetailContent() {
           Package / Team Cost / Other Expenses row underneath. --- */}
       {isAdminOrPM && (
         <div className="mb-6 flex flex-col gap-3">
+          {["super_admin", "admin"].includes(user.role) && (
+            <div className="flex justify-end text-xs">
+              <Link href="/finance/transactions" className="font-medium text-emerald-700 hover:underline">
+                Add income / expense for this project in Finance →
+              </Link>
+            </div>
+          )}
           <Card>
             <CardContent className="flex flex-col gap-6 p-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -1216,6 +1275,18 @@ function ProjectDetailContent() {
                             </Select>
                           </div>
                         </div>
+                        {financeAccounts.length > 0 && invoiceForm.status === "paid" && (
+                          <div>
+                            <Label>Received into account</Label>
+                            <SearchableSelect
+                              value={invoiceForm.accountId}
+                              onValueChange={(v) => setInvoiceForm((p) => ({ ...p, accountId: v }))}
+                              options={financeAccounts.map((a) => ({ value: a.id, label: a.name }))}
+                              placeholder="Select account..."
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Optional — lets this move that account&apos;s balance. Can be set later in Finance.</p>
+                          </div>
+                        )}
                         <div>
                           <Label htmlFor="invoiceNote">Note (optional)</Label>
                           <Textarea
@@ -1672,6 +1743,18 @@ function ProjectDetailContent() {
                             required
                           />
                         </div>
+                        {financeAccounts.length > 0 && true && (
+                          <div>
+                            <Label>Paid from account</Label>
+                            <SearchableSelect
+                              value={expenseForm.accountId}
+                              onValueChange={(v) => setExpenseForm((p) => ({ ...p, accountId: v }))}
+                              options={financeAccounts.map((a) => ({ value: a.id, label: a.name }))}
+                              placeholder="Select account..."
+                            />
+                            <p className="mt-1 text-xs text-slate-500">Optional — lets this move that account&apos;s balance. Can be set later in Finance.</p>
+                          </div>
+                        )}
                         <div>
                           <Label htmlFor="expenseDescription">Description</Label>
                           <Textarea
@@ -1745,6 +1828,43 @@ function ProjectDetailContent() {
           }}
         />
       )}
+
+      <Dialog open={!!payInvoice} onOpenChange={(o) => !o && setPayInvoice(null)}>
+        <DialogContent className="w-[95vw] max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Mark {payInvoice?.invoiceNumber} as paid</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div>
+              <Label>Received into account</Label>
+              <SearchableSelect
+                value={payAccount}
+                onValueChange={setPayAccount}
+                options={financeAccounts.map((a) => ({ value: a.id, label: a.name }))}
+                placeholder="Select account..."
+              />
+            </div>
+            <div>
+              <Label htmlFor="payInvoiceDate">Date received</Label>
+              <Input id="payInvoiceDate" type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+            </div>
+            <Button onClick={confirmInvoicePaid} disabled={!payAccount || !payDate}>
+              Mark as paid
+            </Button>
+            <button
+              type="button"
+              className="text-xs text-slate-500 hover:underline"
+              onClick={() => {
+                const inv = payInvoice;
+                setPayInvoice(null);
+                toggleInvoiceStatus(inv);
+              }}
+            >
+              Skip — assign the account later in Finance
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={addDeliverableOpen} onOpenChange={setAddDeliverableOpen}>
         <DialogContent className="w-[95vw] max-w-sm">

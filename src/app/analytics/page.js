@@ -35,15 +35,9 @@ import { getAllInvoices, sumReceived } from "@/lib/firebase/invoices";
 import { getAllLeads } from "@/lib/firebase/leads";
 import { LEAD_STATUSES, LEAD_SOURCES } from "@/lib/constants/leads";
 import { QUOTE_STATUSES, QUOTE_STATUS_LABELS } from "@/lib/constants/quotations";
-import {
-  getAllExpenses,
-  createExpense,
-  deleteExpense,
-  sumExpensesByProject,
-  EXPENSE_TYPES,
-  MANUAL_EXPENSE_CATEGORIES,
-  getAllExpenseCategories,
-} from "@/lib/firebase/expenses";
+import { getAllExpenses, sumExpensesByProject } from "@/lib/firebase/expenses";
+import { getTransactions } from "@/lib/firebase/finance";
+import { plExpense, plIncome } from "@/lib/finance/calc";
 import { getAllEmployees } from "@/lib/firebase/employees";
 import { getAllFreelancers } from "@/lib/firebase/freelancers";
 import { getAllDeliverables, DELIVERABLE_STATUSES, DELIVERABLE_TYPES } from "@/lib/firebase/deliverables";
@@ -71,6 +65,7 @@ import {
   Target,
   Clapperboard,
 } from "lucide-react";
+import { getISTDateStr } from "@/lib/dateIST";
 
 // Financial data — admin/PM only, mirrors the isProjectOps() boundary on
 // leads/quotations/expenses in firestore.rules. Not shown to HR, leaders,
@@ -82,7 +77,6 @@ const TABS = [
   { id: "value", label: "Employee Value", icon: IndianRupee },
   { id: "funnel", label: "Sales Funnel", icon: Target },
   { id: "post-prod", label: "Post-Production", icon: Clapperboard },
-  { id: "expenses", label: "Expenses", icon: Wallet },
   { id: "pnl", label: "Profit & Loss", icon: TrendingUp },
 ];
 
@@ -162,7 +156,6 @@ function AnalyticsContent() {
   const [freelancers, setFreelancers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [leads, setLeads] = useState([]);
-  const [expenseCategories, setExpenseCategories] = useState(MANUAL_EXPENSE_CATEGORIES);
 
   useEffect(() => {
     if (!isAllowed) {
@@ -172,7 +165,7 @@ function AnalyticsContent() {
     async function load() {
       setLoading(true);
       try {
-        const [evts, projs, quotes, invs, exps, emps, frls, lds, cats] = await Promise.all([
+        const [evts, projs, quotes, invs, exps, emps, frls, lds] = await Promise.all([
           getAllEvents(),
           getAllProjects(),
           getAllQuotations(),
@@ -181,7 +174,6 @@ function AnalyticsContent() {
           getAllEmployees(),
           getAllFreelancers(),
           getAllLeads(),
-          getAllExpenseCategories(),
         ]);
         // Deliverables are fetched per-project (see getAllDeliverables), so
         // it runs after projs is available rather than inside the Promise.all above.
@@ -189,11 +181,28 @@ function AnalyticsContent() {
         setEvents(evts);
         setProjects(projs);
         setQuotations(quotes);
-        setInvoices(invs);
-        setExpenses(exps);
+        // Money entered once in Finance (admin / super_admin only — the ledger's
+        // rules) is folded into the same shapes this page already reads, so
+        // Project P&L reflects it: ledger expenses become expense rows and
+        // ledger income becomes paid "invoices".
+        let ledger = [];
+        if (["super_admin", "admin"].includes(user.role)) {
+          try {
+            ledger = await getTransactions();
+          } catch (err) {
+            console.error("Finance ledger unavailable:", err);
+          }
+        }
+        const ledgerExpenses = ledger
+          .filter((t) => t.projectId && plExpense(t) > 0)
+          .map((t) => ({ projectId: t.projectId, amount: plExpense(t), date: t.date, category: t.category }));
+        const ledgerIncome = ledger
+          .filter((t) => t.projectId && plIncome(t) > 0)
+          .map((t) => ({ projectId: t.projectId, status: "paid", amount: plIncome(t), paidAt: t.date, date: t.date }));
+        setInvoices([...invs, ...ledgerIncome]);
+        setExpenses([...exps, ...ledgerExpenses]);
         setEmployees(emps);
         setFreelancers(frls);
-        setExpenseCategories(cats);
         setTasks(tsks);
         setLeads(lds);
       } catch (err) {
@@ -206,11 +215,6 @@ function AnalyticsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAllowed]);
 
-  async function refreshExpenses() {
-    const exps = await getAllExpenses();
-    setExpenses(exps);
-  }
-
   if (!isAllowed) return null;
 
   return (
@@ -218,7 +222,7 @@ function AnalyticsContent() {
       <div className="mb-6">
         <h1 className="font-heading text-2xl font-semibold text-foreground">Analytics</h1>
         <p className="text-sm text-muted-foreground">
-          Team load, sales, post-production, expenses, and project profitability.
+          Team load, sales, post-production, and project profitability. Expenses now live under Finance.
         </p>
       </div>
 
@@ -249,17 +253,6 @@ function AnalyticsContent() {
         <SalesFunnelTab leads={leads} quotations={quotations} />
       ) : tab === "post-prod" ? (
         <PostProductionTab tasks={tasks} employees={employees} />
-      ) : tab === "expenses" ? (
-        <ExpensesTab
-          expenses={expenses}
-          projects={projects}
-          employees={employees}
-          freelancers={freelancers}
-          events={events}
-          user={user}
-          onChanged={refreshExpenses}
-          expenseCategories={expenseCategories}
-        />
       ) : (
         <PnlTab projects={projects} quotations={quotations} invoices={invoices} expenses={expenses} events={events} />
       )}
@@ -880,7 +873,7 @@ function SalesFunnelTab({ leads, quotations }) {
 // the isOverdue() helper that used to live in postProduction.js.
 function isDeliverableOverdue(d) {
   if (!d.deadline || d.status === "Delivered") return false;
-  return d.deadline < new Date().toISOString().split("T")[0];
+  return d.deadline < getISTDateStr();
 }
 
 function PostProductionTab({ tasks, employees }) {
@@ -1033,404 +1026,6 @@ function PostProductionTab({ tasks, employees }) {
                   <TableCell className="text-right">{r.total}</TableCell>
                   <TableCell className="text-right">{r.completed}</TableCell>
                   <TableCell className={`text-right ${r.overdue > 0 ? "text-destructive font-medium" : ""}`}>{r.overdue}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------
-// Tab 5: Expenses — freelancer payouts (auto-suggested from dayRate ×
-// shoot days on their assignments, logged on demand rather than
-// auto-created so admin controls exactly when a payout is recorded),
-// manual costs, and advances/reimbursements to anyone on the team.
-// ---------------------------------------------------------------------
-function ExpensesTab({ expenses, projects, employees, freelancers, events, user, onChanged, expenseCategories = MANUAL_EXPENSE_CATEGORIES }) {
-  const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState({
-    projectId: "",
-    category: "Misc",
-    amount: "",
-    description: "",
-    date: new Date().toISOString().slice(0, 10),
-  });
-  const [saving, setSaving] = useState(false);
-  const [filterProject, setFilterProject] = useState("all");
-  const [filterType, setFilterType] = useState("all");
-  const [search, setSearch] = useState("");
-
-  // Suggested freelancer payouts still outstanding: for every freelancer
-  // team-member on an event, dayRate × shootDays, summed per (project,
-  // person) — then netted against whatever's already been logged as
-  // freelancer_payout expenses for that same pair. Only the remaining
-  // balance is surfaced, so adding someone to a second event on the same
-  // project after already logging their first payout just bumps the
-  // suggestion by the new amount instead of requiring you to delete and
-  // relog the whole thing. Uses the rate set at assignment time (m.dayRate
-  // — can be a project-specific override), falling back to the
-  // freelancer's profile dayRate for older assignments made before
-  // per-assignment rates existed.
-  const suggestedPayouts = useMemo(() => {
-    const loggedByKey = {};
-    expenses
-      .filter((e) => e.type === "freelancer_payout")
-      .forEach((e) => {
-        const key = `${e.projectId}:${e.personUid}`;
-        loggedByKey[key] = (loggedByKey[key] || 0) + (e.amount || 0);
-      });
-
-    const byKey = {};
-    events.forEach((ev) => {
-      (ev.team || []).forEach((m) => {
-        if (m.type !== "freelancer") return;
-        const fl = freelancers.find((f) => f.id === m.uid);
-        const rate = m.dayRate || fl?.dayRate || 0;
-        if (!rate) return;
-        const key = `${ev.projectId}:${m.uid}`;
-        if (!byKey[key]) {
-          byKey[key] = {
-            key,
-            projectId: ev.projectId,
-            projectName: ev.projectName,
-            personUid: m.uid,
-            personName: m.name,
-            days: 0,
-            totalAmount: 0,
-            rates: new Set(),
-          };
-        }
-        const evDays = ev.shootDays || 1;
-        byKey[key].days += evDays;
-        byKey[key].totalAmount += evDays * rate;
-        byKey[key].rates.add(rate);
-      });
-    });
-
-    // dayRate is shown as a single figure in the UI/description; if every
-    // event used the same rate it's exact, otherwise it's a blended
-    // average (totalAmount / days) since events can carry different rates.
-    return Object.values(byKey)
-      .map((r) => {
-        const alreadyLogged = loggedByKey[r.key] || 0;
-        const amount = r.totalAmount - alreadyLogged;
-        return {
-          ...r,
-          alreadyLogged,
-          amount,
-          dayRate: r.rates.size === 1 ? [...r.rates][0] : Math.round(r.totalAmount / r.days),
-        };
-      })
-      .filter((r) => r.amount > 0);
-  }, [events, expenses, freelancers]);
-
-  async function logSuggestedPayout(s) {
-    try {
-      await createExpense(
-        {
-          projectId: s.projectId,
-          projectName: s.projectName,
-          type: "freelancer_payout",
-          category: "Freelancer Payout",
-          amount: s.amount,
-          description: s.alreadyLogged
-            ? `Additional payout · ${s.days} total shoot days @ ~${formatINR(s.dayRate)}/day (${formatINR(s.alreadyLogged)} already logged)`
-            : `${s.days} shoot day${s.days > 1 ? "s" : ""} @ ${formatINR(s.dayRate)}/day`,
-          personUid: s.personUid,
-          personName: s.personName,
-          personType: "freelancer",
-          date: new Date().toISOString().slice(0, 10),
-        },
-        user.uid,
-        user.name
-      );
-      toast.success("Payout logged");
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    }
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!form.projectId || !form.amount) {
-      toast.error("Project and amount are required");
-      return;
-    }
-    setSaving(true);
-    try {
-      const project = projects.find((p) => p.id === form.projectId);
-      await createExpense(
-        {
-          projectId: form.projectId,
-          projectName: project?.projectName || "",
-          type: "manual",
-          category: form.category,
-          amount: form.amount,
-          description: form.description,
-          date: form.date,
-        },
-        user.uid,
-        user.name
-      );
-      toast.success("Expense logged");
-      setForm({
-        projectId: "",
-        category: "Misc",
-        amount: "",
-        description: "",
-        date: new Date().toISOString().slice(0, 10),
-      });
-      setFormOpen(false);
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDelete(id) {
-    if (!confirm("Delete this expense entry?")) return;
-    try {
-      await deleteExpense(id);
-      toast.success("Deleted");
-      onChanged();
-    } catch (err) {
-      toast.error(err.message);
-    }
-  }
-
-  const filteredExpenses = expenses.filter((e) => {
-    if (filterProject !== "all" && e.projectId !== filterProject) return false;
-    if (filterType !== "all" && e.type !== filterType) return false;
-    const term = search.trim().toLowerCase();
-    if (term) {
-      const haystack = [e.projectName, e.personName, e.description, e.category]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(term)) return false;
-    }
-    return true;
-  });
-  const totalShown = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-
-  const byCategoryChart = useMemo(() => {
-    const map = {};
-    filteredExpenses.forEach((e) => {
-      const label = e.type === "freelancer_payout" ? "Freelancer Payouts" : e.type === "advance" ? "Advances" : e.category || "Misc";
-      map[label] = (map[label] || 0) + (e.amount || 0);
-    });
-    return Object.entries(map)
-      .map(([category, amount]) => ({ category, amount }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [filteredExpenses]);
-
-  return (
-    <div>
-      {suggestedPayouts.length > 0 && (
-        <Card className="mb-4 border-accent/30 bg-accent/5">
-          <CardContent className="p-4">
-            <p className="mb-2 text-sm font-medium text-foreground">
-              Freelancer payouts due ({suggestedPayouts.length})
-            </p>
-            <div className="flex flex-col gap-2">
-              {suggestedPayouts.map((s) => (
-                <div key={s.key} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background p-2 text-sm">
-                  <span>
-                    <span className="font-medium text-foreground">{s.personName}</span>{" "}
-                    <span className="text-muted-foreground">
-                      · {s.projectName} · {s.days} total day{s.days > 1 ? "s" : ""} · {formatINR(s.amount)} due
-                      {s.alreadyLogged > 0 && ` (${formatINR(s.alreadyLogged)} already logged)`}
-                    </span>
-                  </span>
-                  <Button size="sm" variant="outline" onClick={() => logSuggestedPayout(s)}>
-                    Log payout
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search description, person, project..."
-            className="w-full sm:w-64"
-          />
-          <Select value={filterProject} onValueChange={setFilterProject}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Project">
-                {(v) => (v === "all" ? "All Projects" : projects.find((p) => p.id === v)?.projectName || "Project")}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Projects</SelectItem>
-              {projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.projectName}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={filterType} onValueChange={setFilterType}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Type">
-                {(v) =>
-                  v === "all"
-                    ? "All Types"
-                    : v === "freelancer_payout"
-                    ? "Freelancer Payout"
-                    : v === "advance"
-                    ? "Advance/Reimbursement"
-                    : "Manual Expense"
-                }
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="freelancer_payout">Freelancer Payout</SelectItem>
-              <SelectItem value="advance">Advance/Reimbursement</SelectItem>
-              <SelectItem value="manual">Manual Expense</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Button onClick={() => setFormOpen((v) => !v)}>
-          <Plus className="h-4 w-4" /> Log Expense
-        </Button>
-      </div>
-
-      {formOpen && (
-        <Card className="mb-4">
-          <CardContent className="p-4">
-            <form onSubmit={handleSubmit} className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <Label>Project</Label>
-                <Select value={form.projectId} onValueChange={(v) => setForm((f) => ({ ...f, projectId: v }))}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select project">
-                      {(v) => projects.find((p) => p.id === v)?.projectName || "Select project"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.projectName}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Category</Label>
-                <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {expenseCategories.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Amount (₹)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={form.amount}
-                  onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-                />
-              </div>
-              <div>
-                <Label>Date</Label>
-                <Input
-                  type="date"
-                  value={form.date}
-                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <Label>Description</Label>
-                <Textarea
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={2}
-                />
-              </div>
-              <div className="flex gap-2 sm:col-span-2">
-                <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save Expense"}</Button>
-                <Button type="button" variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-
-      <Card className="mb-3">
-        <CardContent className="flex items-center justify-between p-3 text-sm">
-          <span className="text-muted-foreground">{filteredExpenses.length} entries</span>
-          <span className="font-semibold text-foreground">Total: {formatINR(totalShown)}</span>
-        </CardContent>
-      </Card>
-
-      {byCategoryChart.length > 0 && (
-        <Card className="mb-4">
-          <CardContent className="pt-4">
-            <p className="mb-2 text-sm font-medium text-foreground">By category</p>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={byCategoryChart} margin={{ left: 8, right: 16, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="category" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" interval={0} height={55} />
-                <YAxis tickFormatter={(v) => formatINR(v)} tick={{ fontSize: 11 }} width={60} />
-                <Tooltip formatter={(v) => [formatINR(v), "Amount"]} contentStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="amount" name="Amount" stroke={LINE_COLORS[1]} strokeWidth={2} dot={{ r: 4 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {filteredExpenses.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No expenses logged yet.</p>
-      ) : (
-        <Card>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Person</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                <TableHead className="w-8" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredExpenses.map((e) => (
-                <TableRow key={e.id}>
-                  <TableCell className="text-muted-foreground">{e.date}</TableCell>
-                  <TableCell>{e.projectName}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {e.type === "freelancer_payout" ? "Freelancer Payout" : e.type === "advance" ? "Advance" : e.category}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{e.personName || "—"}</TableCell>
-                  <TableCell
-                    className="max-w-[280px] whitespace-normal break-words text-muted-foreground"
-                    title={e.description || undefined}
-                  >
-                    {e.description || "—"}
-                  </TableCell>
-                  <TableCell className="text-right font-medium">{formatINR(e.amount)}</TableCell>
-                  <TableCell>
-                    <button onClick={() => handleDelete(e.id)} className="text-muted-foreground hover:text-destructive">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

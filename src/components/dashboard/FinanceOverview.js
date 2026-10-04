@@ -11,7 +11,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { IndianRupee, TrendingUp, AlertTriangle, Wallet } from "lucide-react";
+import { IndianRupee, AlertTriangle, Wallet } from "lucide-react";
 import { formatINR } from "@/lib/dashboardFinance";
 
 /**
@@ -34,18 +34,25 @@ const TONES = {
   negative: { value: "text-destructive", chip: "bg-destructive/10 text-destructive" },
 };
 
+// Axis labels in Indian units — "₹12L" rather than "₹1200k", which the narrow
+// axis clipped to "200k" and made the scale read backwards.
+function compactINR(v) {
+  if (v >= 1e7) return `₹${+(v / 1e7).toFixed(1)}Cr`;
+  if (v >= 1e5) return `₹${+(v / 1e5).toFixed(1)}L`;
+  if (v >= 1e3) return `₹${Math.round(v / 1e3)}k`;
+  return `₹${v}`;
+}
+
 export default function FinanceOverview({ finance, loading, fyLabelText }) {
   const {
     totalRevenue,
     projectsBooked,
-    receivedOnBookings,
     outstanding,
     overCollected = 0,
     cashReceived,
     monthly,
   } = finance;
 
-  const collectedPct = totalRevenue > 0 ? Math.round((receivedOnBookings / totalRevenue) * 100) : 0;
   const outstandingPct = totalRevenue > 0 ? Math.round((outstanding / totalRevenue) * 100) : 0;
 
   // Nothing outstanding is genuinely good news, so it shouldn't glare red.
@@ -56,7 +63,8 @@ export default function FinanceOverview({ finance, loading, fyLabelText }) {
 
   return (
     <div className="flex flex-col gap-3 sm:gap-4">
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-3">
+        <div className="col-span-2 lg:col-span-1">
         <FinanceStatCard
           icon={IndianRupee}
           label="Total Revenue"
@@ -65,18 +73,7 @@ export default function FinanceOverview({ finance, loading, fyLabelText }) {
           tone="neutral"
           loading={loading}
         />
-        <FinanceStatCard
-          icon={TrendingUp}
-          label="Received on Bookings"
-          value={formatINR(receivedOnBookings)}
-          subtext={
-            totalRevenue > 0
-              ? `${collectedPct}% of ${fyLabelText} bookings collected`
-              : "no bookings yet"
-          }
-          tone={receivedOnBookings > 0 ? "positive" : "neutral"}
-          loading={loading}
-        />
+        </div>
         <FinanceStatCard
           icon={AlertTriangle}
           label="Outstanding"
@@ -128,8 +125,8 @@ export default function FinanceOverview({ finance, loading, fyLabelText }) {
                       tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                       axisLine={false}
                       tickLine={false}
-                      tickFormatter={(v) => `₹${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
-                      width={45}
+                      tickFormatter={compactINR}
+                      width={56}
                     />
                     <Tooltip
                       cursor={{ fill: "var(--muted)", opacity: 0.5 }}

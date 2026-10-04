@@ -144,13 +144,11 @@ export async function getAttendanceForMonth(year, month) {
 }
 
 export async function getEmployeeAttendanceHistory(uid) {
-  const q = query(
-    collection(db, "attendance"),
-    where("employeeUid", "==", uid),
-    orderBy("date", "desc")
-  );
+  // Sorted in the browser: where(employeeUid) + orderBy(date) would need a
+  // composite Firestore index that may not exist in every environment.
+  const q = query(collection(db, "attendance"), where("employeeUid", "==", uid));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => d.data());
+  return snap.docs.map((d) => d.data()).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 }
 
 export async function getAutoLeaveRecordsForEmployee(uid) {

@@ -12,6 +12,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./client";
+import { getISTDateStr } from "@/lib/dateIST";
 
 /**
  * Expense doc shape (expenses/{id}):
@@ -93,10 +94,12 @@ export async function createExpense(data, createdByUid, createdByName) {
     category: data.category || (data.type === "manual" ? "Miscellaneous" : ""),
     amount: Number(data.amount) || 0,
     description: data.description || "",
+    // Finance account the expense was paid from (optional; can be assigned later in Finance).
+    accountId: data.accountId ?? null,
     personUid: data.personUid || null,
     personName: data.personName || null,
     personType: data.personType || null,
-    date: data.date || now.slice(0, 10),
+    date: data.date || getISTDateStr(),
     createdBy: createdByUid,
     createdByName: createdByName || "",
     createdAt: now,

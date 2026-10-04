@@ -241,7 +241,19 @@ export async function removeHardDisk(projectId, diskId) {
  * the rule is the actual enforcement boundary.
  */
 export async function deleteProject(projectId) {
-  const eventsSnap = await getDocs(collection(db, "projects", projectId, "events"));
+  // Everything that belongs only to this project goes with it: events (and
+  // their status updates), deliverables, invoices and project expenses.
+  // Deliverables used to be left behind, so editors kept seeing tasks for a
+  // deleted project in "my deliverables"; orphaned paid invoices kept counting
+  // as Cash Received on the dashboard.
+  // Finance ledger rows are NOT deleted — they're real money movements and
+  // carry the project name, so balances and reports stay correct.
+  const [eventsSnap, deliverablesSnap, invoicesSnap, expensesSnap] = await Promise.all([
+    getDocs(collection(db, "projects", projectId, "events")),
+    getDocs(collection(db, "projects", projectId, "deliverables")),
+    getDocs(query(collection(db, "invoices"), where("projectId", "==", projectId))),
+    getDocs(query(collection(db, "expenses"), where("projectId", "==", projectId))),
+  ]);
 
   const statusUpdatesSnaps = await Promise.all(
     eventsSnap.docs.map((eventDoc) =>
@@ -249,19 +261,19 @@ export async function deleteProject(projectId) {
     )
   );
 
-  const batch = writeBatch(db);
+  const refs = [
+    ...statusUpdatesSnaps.flatMap((snap) => snap.docs.map((d) => d.ref)),
+    ...eventsSnap.docs.map((d) => d.ref),
+    ...deliverablesSnap.docs.map((d) => d.ref),
+    ...invoicesSnap.docs.map((d) => d.ref),
+    ...expensesSnap.docs.map((d) => d.ref),
+  ];
 
-  eventsSnap.docs.forEach((eventDoc) => {
-    batch.delete(eventDoc.ref);
-  });
-
-  statusUpdatesSnaps.forEach((snap) => {
-    snap.docs.forEach((suDoc) => {
-      batch.delete(suDoc.ref);
-    });
-  });
-
-  batch.delete(doc(db, "projects", projectId));
-
-  await batch.commit();
+  // Firestore batches cap at 500 writes; the project doc goes in the last one.
+  for (let i = 0; i < refs.length; i += 450) {
+    const batch = writeBatch(db);
+    refs.slice(i, i + 450).forEach((r) => batch.delete(r));
+    await batch.commit();
+  }
+  await deleteDoc(doc(db, "projects", projectId));
 }

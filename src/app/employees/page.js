@@ -39,6 +39,8 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Plus, Upload, Search, Pencil, CalendarDays, UserMinus, UserCheck, Trash2, Users, Building2, Mail, Phone } from "lucide-react";
 
 const EMPTY_ROW = () => ({ name: "", email: "", password: "", phone: "", role: "photographer", department: "Photography" });
 
@@ -57,6 +59,36 @@ function parseCsv(text) {
         });
         return row;
     });
+}
+
+const ROLE_LABELS = {
+    super_admin: "Super Admin",
+    admin: "Admin",
+    hr: "HR",
+    project_manager: "Project Manager",
+    photographer: "Photographer",
+    videographer: "Videographer",
+    editor: "Editor",
+    data_manager: "Data Manager",
+    accountant: "Accountant",
+};
+function roleLabel(role) {
+    return ROLE_LABELS[role] || (role || "").replace(/_/g, " ");
+}
+
+function StatTile({ icon: Icon, label, value, tone = "neutral" }) {
+    const chip = tone === "positive" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground";
+    return (
+        <Card className="h-full">
+            <CardContent className="p-3 sm:p-4">
+                <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground sm:text-xs">{label}</p>
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${chip}`}><Icon className="h-3.5 w-3.5" /></div>
+                </div>
+                <p className="mt-2 font-heading text-xl font-semibold tabular-nums text-foreground sm:text-2xl">{value}</p>
+            </CardContent>
+        </Card>
+    );
 }
 
 function EmployeesContent() {
@@ -138,16 +170,42 @@ function EmployeesContent() {
         );
     }
 
+    // Delete is gated by the server's finance check — see /api/employees/delete.
+    const [deleteCheck, setDeleteCheck] = useState(null); // { emp, code, blocking, history }
+    const [deleting, setDeleting] = useState(false);
+
     async function handleDelete(emp) {
         const confirmed = window.confirm(
-            `Permanently delete ${emp.name}? This will remove their account, attendance history, leave records, and device records. This cannot be undone.`
+            `Permanently delete ${emp.name}? This will remove their account, attendance history, leave records, and device records. This cannot be undone.\n\nIf they have left the company, Deactivate is usually the better choice.`
         );
         if (!confirmed) return;
+        await runDelete(emp, false);
+    }
 
+    async function runDelete(emp, force) {
+        setDeleting(true);
         try {
-            await deleteEmployee(emp.uid);
+            await deleteEmployee(emp.uid, { force });
             toast.success(`${emp.name} deleted permanently`);
             setEmployees((prev) => prev.filter((e) => e.uid !== emp.uid));
+            setDeleteCheck(null);
+        } catch (err) {
+            if (err.code === "FINANCE_PENDING" || err.code === "FINANCE_HISTORY") {
+                setDeleteCheck({ emp, code: err.code, blocking: err.blocking, history: err.history });
+            } else {
+                toast.error(err.message);
+            }
+        } finally {
+            setDeleting(false);
+        }
+    }
+
+    async function deactivateInstead(emp) {
+        try {
+            if (emp.status === "active") await deactivateEmployee(emp.uid);
+            setEmployees((prev) => prev.map((e) => (e.uid === emp.uid ? { ...e, status: "inactive" } : e)));
+            toast.success(`${emp.name} deactivated — their history stays in Finance under "Former staff"`);
+            setDeleteCheck(null);
         } catch (err) {
             toast.error(err.message);
         }
@@ -268,25 +326,58 @@ function EmployeesContent() {
         });
     }, [employees, search, deptFilter, roleFilter, statusFilter]);
 
+    const counts = {
+        total: employees.length,
+        active: employees.filter((e) => e.status === "active").length,
+        inactive: employees.filter((e) => e.status !== "active").length,
+        departments: new Set(employees.map((e) => e.department).filter(Boolean)).size,
+    };
+    const hasFilters = search || deptFilter !== "all" || roleFilter !== "all" || statusFilter !== "all";
+
+    function rowActions(emp, withLabels = false) {
+        const lbl = (t) => (withLabels ? <span className="text-xs">{t}</span> : null);
+        return (
+            <>
+                <Button size={withLabels ? "sm" : "icon-sm"} variant="ghost" title="Edit" aria-label="Edit" onClick={() => openEditor(emp)}>
+                    <Pencil className="h-3.5 w-3.5" />{lbl("Edit")}
+                </Button>
+                <Button size={withLabels ? "sm" : "icon-sm"} variant="ghost" title="Leave balance" aria-label="Leave balance" onClick={() => openBalanceEditor(emp)}>
+                    <CalendarDays className="h-3.5 w-3.5" />{lbl("Leave")}
+                </Button>
+                <Button size={withLabels ? "sm" : "icon-sm"} variant="ghost" title={emp.status === "active" ? "Deactivate" : "Activate"} aria-label={emp.status === "active" ? "Deactivate" : "Activate"} onClick={() => handleToggleStatus(emp)}>
+                    {emp.status === "active" ? <UserMinus className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                    {lbl(emp.status === "active" ? "Deactivate" : "Activate")}
+                </Button>
+                <Button size={withLabels ? "sm" : "icon-sm"} variant="ghost" title="Delete" aria-label="Delete" onClick={() => handleDelete(emp)}>
+                    <Trash2 className="h-3.5 w-3.5 text-destructive" />{lbl("Delete")}
+                </Button>
+            </>
+        );
+    }
+
     return (
         <AppShell>
-            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-xl font-semibold text-slate-900 sm:text-2xl">Employees</h2>
-                <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="mx-auto w-full max-w-6xl">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h1 className="font-heading text-xl font-semibold text-foreground sm:text-2xl">Employees</h1>
+                    <p className="mt-0.5 text-sm text-muted-foreground">Team accounts, roles, departments and leave balances.</p>
+                </div>
+                <div className="flex gap-2">
                 <Button
                     variant="outline"
-                    className="w-full sm:w-auto"
+                    className="flex-1 sm:flex-none"
                     onClick={() => {
                         setBulkResults(null);
                         setBulkOpen(true);
                     }}
                 >
-                    Bulk Add
+                    <Upload className="h-4 w-4" /> Bulk add
+                </Button>
+                <Button className="flex-1 sm:flex-none" onClick={() => setDialogOpen(true)}>
+                    <Plus className="h-4 w-4" /> Add employee
                 </Button>
                 <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                    <DialogTrigger className="inline-flex w-full items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 sm:w-auto">
-                        Add Employee
-                    </DialogTrigger>
                     <DialogContent className="max-h-[85vh] w-[95vw] max-w-md overflow-y-auto sm:w-full">
                         <DialogHeader>
                             <DialogTitle>Add New Employee</DialogTitle>
@@ -300,35 +391,39 @@ function EmployeesContent() {
                                 <Label htmlFor="email">Email</Label>
                                 <Input id="email" type="email" value={form.email} onChange={(e) => updateForm("email", e.target.value)} required />
                             </div>
-                            <div>
-                                <Label htmlFor="password">Temporary Password</Label>
-                                <Input id="password" type="text" value={form.password} onChange={(e) => updateForm("password", e.target.value)} required />
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <div>
+                                    <Label htmlFor="password">Temporary Password</Label>
+                                    <Input id="password" type="text" value={form.password} onChange={(e) => updateForm("password", e.target.value)} required />
+                                </div>
+                                <div>
+                                    <Label htmlFor="phone">Phone</Label>
+                                    <Input id="phone" value={form.phone} onChange={(e) => updateForm("phone", e.target.value)} />
+                                </div>
                             </div>
-                            <div>
-                                <Label htmlFor="phone">Phone</Label>
-                                <Input id="phone" value={form.phone} onChange={(e) => updateForm("phone", e.target.value)} />
-                            </div>
-                            <div>
-                                <Label>Role</Label>
-                                <Select value={form.role} onValueChange={(v) => updateForm("role", v)}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        {Object.values(ROLES).map((role) => (
-                                            <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div>
-                                <Label>Department</Label>
-                                <Select value={form.department} onValueChange={(v) => updateForm("department", v)}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        {DEPARTMENTS.map((dept) => (
-                                            <SelectItem key={dept} value={dept}>{dept}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <div>
+                                    <Label>Role</Label>
+                                    <Select value={form.role} onValueChange={(v) => updateForm("role", v)}>
+                                        <SelectTrigger className="w-full"><SelectValue>{(v) => roleLabel(v)}</SelectValue></SelectTrigger>
+                                        <SelectContent>
+                                            {Object.values(ROLES).map((role) => (
+                                                <SelectItem key={role} value={role}>{roleLabel(role)}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>Department</Label>
+                                    <Select value={form.department} onValueChange={(v) => updateForm("department", v)}>
+                                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            {DEPARTMENTS.map((dept) => (
+                                                <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </div>
                             <Button type="submit" disabled={saving}>
                                 {saving ? "Creating..." : "Create Employee"}
@@ -339,16 +434,27 @@ function EmployeesContent() {
                 </div>
             </div>
 
-            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                <Input
-                    placeholder="Search by name, email, or phone..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="w-full sm:w-64"
-                />
+            <div className="mb-4 grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
+                <StatTile icon={Users} label="Total" value={loading ? "–" : counts.total} />
+                <StatTile icon={UserCheck} label="Active" value={loading ? "–" : counts.active} tone="positive" />
+                <StatTile icon={UserMinus} label="Inactive" value={loading ? "–" : counts.inactive} />
+                <StatTile icon={Building2} label="Departments" value={loading ? "–" : counts.departments} />
+            </div>
+
+            <Card className="mb-4">
+                <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="relative w-full sm:w-64">
+                    <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                        placeholder="Search name, email or phone"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="pl-8"
+                    />
+                </div>
                 <div className="grid grid-cols-3 gap-2 sm:flex sm:w-auto">
                     <Select value={deptFilter} onValueChange={setDeptFilter}>
-                        <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Department" /></SelectTrigger>
+                        <SelectTrigger className="w-full sm:w-40"><SelectValue>{(v) => (v === "all" ? "All departments" : v)}</SelectValue></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="all">All departments</SelectItem>
                             {DEPARTMENTS.map((dept) => (
@@ -357,16 +463,16 @@ function EmployeesContent() {
                         </SelectContent>
                     </Select>
                     <Select value={roleFilter} onValueChange={setRoleFilter}>
-                        <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Role" /></SelectTrigger>
+                        <SelectTrigger className="w-full sm:w-40"><SelectValue>{(v) => (v === "all" ? "All roles" : roleLabel(v))}</SelectValue></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="all">All roles</SelectItem>
                             {Object.values(ROLES).map((role) => (
-                                <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>
+                                <SelectItem key={role} value={role}>{roleLabel(role)}</SelectItem>
                             ))}
                         </SelectContent>
                     </Select>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-full sm:w-32"><SelectValue placeholder="Status" /></SelectTrigger>
+                        <SelectTrigger className="w-full sm:w-32"><SelectValue>{(v) => (v === "all" ? "All statuses" : v === "active" ? "Active" : "Inactive")}</SelectValue></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="all">All statuses</SelectItem>
                             <SelectItem value="active">Active</SelectItem>
@@ -374,7 +480,7 @@ function EmployeesContent() {
                         </SelectContent>
                     </Select>
                 </div>
-                {(search || deptFilter !== "all" || roleFilter !== "all" || statusFilter !== "all") && (
+                {hasFilters && (
                     <Button
                         variant="ghost"
                         size="sm"
@@ -389,48 +495,90 @@ function EmployeesContent() {
                         Clear filters
                     </Button>
                 )}
-            </div>
+                <span className="text-xs text-muted-foreground sm:ml-auto">
+                    {loading ? "" : `${filteredEmployees.length} of ${employees.length}`}
+                </span>
+                </CardContent>
+            </Card>
 
             {loading ? (
-                <p className="text-sm text-slate-500">Loading employees...</p>
-            ) : filteredEmployees.length === 0 ? (
-                <p className="text-sm text-slate-500">No employees match your search/filters.</p>
-            ) : (
-                <div className="grid gap-3">
-                    <p className="text-xs text-slate-400">
-                        Showing {filteredEmployees.length} of {employees.length} employees
-                    </p>
-                    {filteredEmployees.map((emp) => (
-                        <Card key={emp.uid}>
-                            <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-                                <div className="flex items-center gap-3">
-                                    <AvatarInitials name={emp.name} />
-                                    <div className="min-w-0">
-                                        <p className="truncate font-medium text-slate-900">{emp.name}</p>
-                                        <p className="truncate text-xs text-slate-500">{emp.email} · {emp.department}</p>
-                                    </div>
-                                </div>
-                                <div className="flex flex-col gap-2">
-                                    <StatusBadge status={emp.status} className="w-fit" />
-                                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                                        <Button size="sm" variant="secondary" onClick={() => openEditor(emp)}>
-                                            Edit
-                                        </Button>
-                                        <Button size="sm" variant="secondary" onClick={() => openBalanceEditor(emp)}>
-                                            Leave Balance
-                                        </Button>
-                                        <Button size="sm" variant="secondary" onClick={() => handleToggleStatus(emp)}>
-                                            {emp.status === "active" ? "Deactivate" : "Activate"}
-                                        </Button>
-                                        <Button size="sm" variant="secondary" onClick={() => handleDelete(emp)}>
-                                            Delete
-                                        </Button>
-                                    </div>
-                                </div>
-                            </CardContent>
-                        </Card>
-                    ))}
+                <div className="flex animate-pulse flex-col gap-2">
+                    {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-16 rounded-xl bg-muted/70" />)}
                 </div>
+            ) : filteredEmployees.length === 0 ? (
+                <Card>
+                    <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                        {employees.length === 0 ? "No employees yet. Add your first one." : "No employees match your search or filters."}
+                    </CardContent>
+                </Card>
+            ) : (
+                <>
+                    {/* Phone */}
+                    <div className="flex flex-col gap-2 md:hidden">
+                        {filteredEmployees.map((emp) => (
+                            <div key={emp.uid} className={`rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10 ${emp.status !== "active" ? "opacity-70" : ""}`}>
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="flex min-w-0 items-center gap-2.5">
+                                        <AvatarInitials name={emp.name} />
+                                        <div className="min-w-0">
+                                            <p className="truncate font-medium text-foreground">{emp.name}</p>
+                                            <p className="truncate text-xs text-muted-foreground">{roleLabel(emp.role)} · {emp.department}</p>
+                                        </div>
+                                    </div>
+                                    <StatusBadge status={emp.status} />
+                                </div>
+                                <div className="mt-2 flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                    <span className="flex items-center gap-1.5 truncate"><Mail className="h-3 w-3 shrink-0" /> {emp.email}</span>
+                                    {emp.phone && <span className="flex items-center gap-1.5"><Phone className="h-3 w-3 shrink-0" /> {emp.phone}</span>}
+                                    <span>Paid leave left: <b className="text-foreground">{emp.leaveBalance?.Paid ?? 0}</b></span>
+                                </div>
+                                <div className="mt-2 flex flex-wrap justify-end gap-1 border-t border-border pt-2">{rowActions(emp, true)}</div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Desktop */}
+                    <Card className="hidden md:flex">
+                        <CardContent className="p-0">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Employee</TableHead>
+                                        <TableHead>Role</TableHead>
+                                        <TableHead>Department</TableHead>
+                                        <TableHead>Phone</TableHead>
+                                        <TableHead className="text-right">Paid leave</TableHead>
+                                        <TableHead>Status</TableHead>
+                                        <TableHead className="w-36" />
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {filteredEmployees.map((emp) => (
+                                        <TableRow key={emp.uid} className={emp.status !== "active" ? "opacity-70" : ""}>
+                                            <TableCell>
+                                                <div className="flex items-center gap-2.5">
+                                                    <AvatarInitials name={emp.name} size="sm" />
+                                                    <div className="min-w-0">
+                                                        <p className="truncate font-medium text-foreground">{emp.name}</p>
+                                                        <p className="truncate text-xs text-muted-foreground">{emp.email}{emp.employeeId ? ` · ${emp.employeeId}` : ""}</p>
+                                                    </div>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>{roleLabel(emp.role)}</TableCell>
+                                            <TableCell className="text-muted-foreground">{emp.department}</TableCell>
+                                            <TableCell className="text-muted-foreground">{emp.phone || "—"}</TableCell>
+                                            <TableCell className={`text-right tabular-nums ${(emp.leaveBalance?.Paid ?? 0) < 0 ? "text-destructive" : ""}`}>{emp.leaveBalance?.Paid ?? 0}</TableCell>
+                                            <TableCell><StatusBadge status={emp.status} /></TableCell>
+                                            <TableCell>
+                                                <div className="flex justify-end gap-0.5">{rowActions(emp)}</div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </CardContent>
+                    </Card>
+                </>
             )}
 
             <Dialog open={!!balanceEmp} onOpenChange={(open) => !open && setBalanceEmp(null)}>
@@ -485,10 +633,10 @@ function EmployeesContent() {
                         <div>
                             <Label>Role</Label>
                             <Select value={editForm.role} onValueChange={(v) => setEditForm((prev) => ({ ...prev, role: v }))}>
-                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectTrigger className="w-full"><SelectValue>{(v) => roleLabel(v)}</SelectValue></SelectTrigger>
                                 <SelectContent>
                                     {Object.values(ROLES).map((role) => (
-                                        <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>
+                                        <SelectItem key={role} value={role}>{roleLabel(role)}</SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
@@ -504,7 +652,7 @@ function EmployeesContent() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-muted-foreground">
                             Email can&apos;t be changed here. To update it, delete and re-add the employee.
                         </p>
                         <Button onClick={handleSaveEdit} disabled={savingEdit}>
@@ -516,7 +664,7 @@ function EmployeesContent() {
 
             {/* Bulk add employees */}
             <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
-                <DialogContent className="max-h-[85vh] w-[95vw] max-w-3xl overflow-y-auto">
+                <DialogContent className="max-h-[85vh] w-[95vw] max-w-3xl overflow-y-auto sm:max-w-3xl">
                     <DialogHeader>
                         <DialogTitle>Bulk Add Employees</DialogTitle>
                     </DialogHeader>
@@ -529,7 +677,7 @@ function EmployeesContent() {
                         <TabsContent value="manual">
                             <div className="flex flex-col gap-3 pt-2">
                                 {bulkRows.map((row, i) => (
-                                    <div key={i} className="grid grid-cols-1 gap-2 rounded-md border border-slate-200 p-3 [&>*]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
+                                    <div key={i} className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 [&>*]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
                                         <Input placeholder="Full name" value={row.name} onChange={(e) => updateBulkRow(i, "name", e.target.value)} />
                                         <Input placeholder="Email" type="email" value={row.email} onChange={(e) => updateBulkRow(i, "email", e.target.value)} />
                                         <Input placeholder="Temp password" value={row.password} onChange={(e) => updateBulkRow(i, "password", e.target.value)} />
@@ -570,12 +718,12 @@ function EmployeesContent() {
 
                         <TabsContent value="csv" className="min-w-0">
                             <div className="flex min-w-0 flex-col gap-3 pt-2">
-                                <p className="break-words text-xs text-slate-500">
+                                <p className="break-words text-xs text-muted-foreground">
                                     CSV columns: <code className="break-all">{CSV_HEADER}</code>. Role and department must match the exact
                                     values used elsewhere in the app (e.g. <code>photographer</code>, <code>Photography</code>).
                                 </p>
                                 <a
-                                    className="text-xs font-medium text-slate-700 underline w-fit"
+                                    className="text-xs font-medium text-foreground/80 underline w-fit"
                                     href={`data:text/csv;charset=utf-8,${encodeURIComponent(CSV_TEMPLATE)}`}
                                     download="employees-template.csv"
                                 >
@@ -600,8 +748,8 @@ function EmployeesContent() {
                     </Tabs>
 
                     {bulkResults && (
-                        <div className="mt-4 flex flex-col gap-1 rounded-md border border-slate-200 p-3">
-                            <p className="text-xs font-medium text-slate-700">Results</p>
+                        <div className="mt-4 flex flex-col gap-1 rounded-md border border-border p-3">
+                            <p className="text-xs font-medium text-foreground/80">Results</p>
                             {bulkResults.map((r, i) => (
                                 <p key={i} className={`text-xs ${r.success ? "text-emerald-600" : "text-rose-600"}`}>
                                     {r.email} — {r.success ? "created" : r.error}
@@ -611,6 +759,53 @@ function EmployeesContent() {
                     )}
                 </DialogContent>
             </Dialog>
+            {/* Finance check: shown when the server refuses or questions a delete */}
+            <Dialog open={!!deleteCheck} onOpenChange={(o) => !o && setDeleteCheck(null)}>
+                <DialogContent className="w-[95vw] max-w-md sm:w-full">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {deleteCheck?.code === "FINANCE_PENDING"
+                                ? `Can't delete ${deleteCheck?.emp.name} yet`
+                                : `${deleteCheck?.emp.name} has finance history`}
+                        </DialogTitle>
+                    </DialogHeader>
+                    {deleteCheck && (
+                        <div className="flex flex-col gap-4 text-sm">
+                            {deleteCheck.blocking.length > 0 && (
+                                <div className="rounded-lg bg-destructive/10 p-3">
+                                    <p className="mb-1 font-medium text-destructive">Still pending in Finance</p>
+                                    <ul className="list-disc pl-5 text-foreground">
+                                        {deleteCheck.blocking.map((b) => <li key={b}>{b}</li>)}
+                                    </ul>
+                                    <p className="mt-2 text-xs text-muted-foreground">Settle these in Finance before deleting.</p>
+                                </div>
+                            )}
+                            {deleteCheck.history.length > 0 && (
+                                <div className="rounded-lg bg-muted/60 p-3">
+                                    <p className="mb-1 font-medium">Finance records that would be left without an employee</p>
+                                    <ul className="list-disc pl-5 text-muted-foreground">
+                                        {deleteCheck.history.map((h) => <li key={h}>{h}</li>)}
+                                    </ul>
+                                </div>
+                            )}
+                            <p className="text-muted-foreground">
+                                <b className="text-foreground">Deactivate instead</b> to stop their login while keeping attendance,
+                                payslips and finance history. They&apos;ll appear under &ldquo;Former staff&rdquo; in Finance.
+                            </p>
+                            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                <Button variant="outline" onClick={() => setDeleteCheck(null)}>Cancel</Button>
+                                {deleteCheck.code === "FINANCE_HISTORY" && (
+                                    <Button variant="destructive" disabled={deleting} onClick={() => runDelete(deleteCheck.emp, true)}>
+                                        {deleting ? "Deleting..." : "Delete anyway"}
+                                    </Button>
+                                )}
+                                <Button onClick={() => deactivateInstead(deleteCheck.emp)}>Deactivate instead</Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+            </div>
         </AppShell>
     );
 }

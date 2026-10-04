@@ -56,7 +56,9 @@ export default function SearchableSelect({
     [options]
   );
 
-  const showSearch = searchable && (alwaysSearch || normalized.length > SEARCH_THRESHOLD);
+  // Every dropdown in the app is type-to-search; alwaysSearch / SEARCH_THRESHOLD are kept
+  // so existing call sites still compile, but the box now always shows.
+  const showSearch = searchable || alwaysSearch || normalized.length > SEARCH_THRESHOLD;
 
   const filtered = React.useMemo(() => {
     const term = query.trim().toLowerCase();

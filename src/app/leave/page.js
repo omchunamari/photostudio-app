@@ -42,6 +42,7 @@ import { toast } from "sonner";
 import StatusBadge from "@/components/ui/status-badge";
 import { Search, Download } from "lucide-react";
 import { formatDateIST } from "@/lib/dateIST";
+import { getISTDateStr } from "@/lib/dateIST";
 
 const ADMIN_ROLES = ["super_admin", "admin", "hr"];
 
@@ -286,7 +287,7 @@ function LeaveContent() {
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const dateStamp = new Date().toISOString().split("T")[0];
+    const dateStamp = getISTDateStr();
     link.href = url;
     link.download = `leave-requests-${dateStamp}.csv`;
     document.body.appendChild(link);

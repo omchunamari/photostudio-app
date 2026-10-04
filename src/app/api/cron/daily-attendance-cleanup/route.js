@@ -61,6 +61,10 @@ export async function GET(request) {
       const uid = userDoc.id;
       const userData = userDoc.data();
       if (userData.role === "super_admin") continue; // super admins don't mark attendance at all
+      // Nobody can be absent before they joined: an employee created today
+      // used to get yesterday auto-marked as leave (and a paid leave deducted).
+      const joinedOn = String(userData.joiningDate || userData.createdAt || "").slice(0, 10);
+      if (joinedOn && joinedOn > yesterdayStr) continue;
 
       const attendanceId = `${uid}_${yesterdayStr}`;
       const attendanceRef = adminDb.collection("attendance").doc(attendanceId);

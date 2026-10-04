@@ -9,7 +9,7 @@ import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import AttendanceCard from "@/components/AttendanceCard";
-import DailyReportPanel from "@/components/DailyReportPanel";
+import DailyReportPanel, { EmployeeReportForm } from "@/components/DailyReportPanel";
 import FinanceOverview from "@/components/dashboard/FinanceOverview";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -23,14 +23,14 @@ import {
 } from "@/components/ui/select";
 import { getAttendanceForDate } from "@/lib/firebase/attendance";
 import { getAllEmployees } from "@/lib/firebase/employees";
-import { getPendingLeaveRequests } from "@/lib/firebase/leave";
+import { getPendingLeaveRequests, getAllLeaveRequests } from "@/lib/firebase/leave";
 import { getAllDevices } from "@/lib/firebase/devices";
 import { getAnnouncement, setAnnouncement, clearAnnouncement, toggleAnnouncementAck } from "@/lib/firebase/announcements";
 import { getEventsForEmployee } from "@/lib/firebase/events";
 import { getDeliverablesForEmployee } from "@/lib/firebase/deliverables";
 import { isEventPast } from "@/lib/status";
 import { FINANCE_ROLES, fyStartYearForDate, fyLabel, loadFinanceOverview } from "@/lib/dashboardFinance";
-import { formatShortDateIST, formatShortDateTime12 } from "@/lib/dateIST";
+import { formatShortDateIST, formatShortDateTime12, getISTDateStr } from "@/lib/dateIST";
 import { toast } from "sonner";
 import {
   Users,
@@ -42,6 +42,8 @@ import {
   Pencil,
   ClipboardList,
   ThumbsUp,
+  CalendarDays,
+  Camera,
 } from "lucide-react";
 
 // Admin behaves like a regular employee on the dashboard now — they check
@@ -76,7 +78,6 @@ function DashboardContent() {
   const [finance, setFinance] = useState({
     totalRevenue: 0,
     projectsBooked: 0,
-    receivedOnBookings: 0,
     outstanding: 0,
     cashReceived: 0,
     monthly: [],
@@ -87,7 +88,7 @@ function DashboardContent() {
     if (!isFinanceView) return;
     let cancelled = false;
     setFinanceLoading(true);
-    loadFinanceOverview(fyStart)
+    loadFinanceOverview(fyStart, { includeLedger: ["super_admin", "admin"].includes(user.role) })
       .then((data) => {
         if (!cancelled) setFinance(data);
       })
@@ -98,7 +99,7 @@ function DashboardContent() {
     return () => {
       cancelled = true;
     };
-  }, [isFinanceView, fyStart]);
+  }, [isFinanceView, fyStart, user.role]);
 
   const [adminStats, setAdminStats] = useState({
     presentToday: null,
@@ -109,6 +110,8 @@ function DashboardContent() {
 
   const [myProjects, setMyProjects] = useState([]); // [{ projectId, projectName, eventCount, latestNote: { text, addedAt } | null }]
   const [myDeliverables, setMyDeliverables] = useState([]);
+  const [myEvents, setMyEvents] = useState([]); // upcoming / in-progress shoots, soonest first
+  const [myLoaded, setMyLoaded] = useState(false);
 
   const [announcement, setAnnouncementState] = useState(null);
   const [editingAnnouncement, setEditingAnnouncement] = useState(false);
@@ -207,18 +210,24 @@ function DashboardContent() {
   }, [isAdminView]);
 
   async function loadAdminStats() {
-    const [todayAttendance, allEmployees, pendingLeaves, allDevices] = await Promise.all([
+    const today = getISTDateStr();
+    const [todayAttendance, allEmployees, pendingLeaves, allDevices, yearLeaves] = await Promise.all([
       getAttendanceForDate(),
       getAllEmployees(),
       getPendingLeaveRequests(),
       getAllDevices(),
+      getAllLeaveRequests(Number(today.slice(0, 4))).catch(() => []),
     ]);
 
-    const activeEmployees = allEmployees.filter((e) => e.status === "active");
-    const presentToday = todayAttendance.filter((r) =>
-      ["present", "late"].includes(r.status)
-    ).length;
-    const absentToday = activeEmployees.length - presentToday;
+    // Only people who are expected to mark attendance: active staff, minus
+    // super admins (they never check in) and anyone on approved leave today.
+    const onLeaveToday = new Set(
+      yearLeaves.filter((l) => l.status === "approved" && l.startDate <= today && today <= l.endDate).map((l) => l.employeeUid)
+    );
+    const expected = allEmployees.filter((e) => e.status === "active" && e.role !== "super_admin" && !onLeaveToday.has(e.uid));
+    const presentUids = new Set(todayAttendance.filter((r) => ["present", "late"].includes(r.status)).map((r) => r.employeeUid));
+    const presentToday = presentUids.size;
+    const absentToday = expected.filter((e) => !presentUids.has(e.uid)).length;
     const pendingDevices = allDevices.filter((d) => d.status === "pending").length;
 
     setAdminStats({
@@ -257,6 +266,15 @@ function DashboardContent() {
     });
 
     setMyProjects(Object.values(byProject).sort((a, b) => b.eventCount - a.eventCount));
+
+    // Shoots that haven't finished yet, soonest first — for "Upcoming shoots".
+    const today = getISTDateStr();
+    setMyEvents(
+      active
+        .filter((ev) => (ev.eventEndDate || ev.eventStartDate || "9999") >= today)
+        .sort((a, b) => (a.eventStartDate || "9999").localeCompare(b.eventStartDate || "9999"))
+    );
+    setMyLoaded(true);
   }
 
   /**
@@ -269,7 +287,7 @@ function DashboardContent() {
   async function loadMyDeliverables() {
     try {
       const deliverables = await getDeliverablesForEmployee(user.uid);
-      setMyDeliverables(deliverables.filter((d) => d.status !== "Delivered"));
+      setMyDeliverables(deliverables.filter((d) => !["Delivered", "Done"].includes(d.status)));
     } catch (err) {
       console.error("Failed to load your deliverables:", err);
     }
@@ -281,7 +299,7 @@ function DashboardContent() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+              {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", timeZone: "Asia/Kolkata" })}
             </p>
             <h2 className="font-heading text-2xl font-semibold text-foreground sm:text-3xl">
               Good {greetingPart()}, {user.name.split(" ")[0]}.
@@ -290,7 +308,7 @@ function DashboardContent() {
           {isFinanceView && (
             <Select value={String(fyStart)} onValueChange={(v) => setFyStart(Number(v))}>
               <SelectTrigger className="w-[130px] bg-card">
-                <SelectValue />
+                <SelectValue>{(v) => fyLabel(Number(v))}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {fyOptions.map((y) => (
@@ -397,6 +415,15 @@ function DashboardContent() {
           </button>
         )}
 
+        {!isAdminView ? (
+          <EmployeeHome
+            user={user}
+            projects={myProjects}
+            events={myEvents}
+            deliverables={myDeliverables}
+            loaded={myLoaded}
+          />
+        ) : (
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -410,7 +437,7 @@ function DashboardContent() {
               {isAdminView && (
                 <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
                   <StatCard icon={Users} label="Present Today" value={adminStats.presentToday} accent="emerald" href="/attendance" />
-                  <StatCard icon={UserX} label="Absent Today" value={adminStats.absentToday} accent="rose" href="/attendance" />
+                  <StatCard icon={UserX} label="Not Checked In" value={adminStats.absentToday} accent="rose" href="/attendance" />
                   <StatCard icon={CalendarClock} label="Pending Leaves" value={adminStats.pendingLeaves} accent="amber" href="/leave" />
                   <StatCard icon={Smartphone} label="Pending Devices" value={adminStats.pendingDevices} accent="sky" href="/devices" />
                 </div>
@@ -426,8 +453,178 @@ function DashboardContent() {
             <DailyReportPanel />
           </TabsContent>
         </Tabs>
+        )}
       </div>
     </AppShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Employee dashboard: today (check-in + daily report) up top, then a few
+// glanceable numbers, upcoming shoots and post-production tasks.
+// ---------------------------------------------------------------------------
+function dueInfo(deadline, today) {
+  if (!deadline) return { label: "No deadline", tone: "text-muted-foreground" };
+  const d = String(deadline).slice(0, 10);
+  const days = Math.round((new Date(`${d}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / 86400000);
+  if (days < 0) return { label: `${-days}d overdue`, tone: "text-destructive font-medium", days };
+  if (days === 0) return { label: "Due today", tone: "text-warning font-medium", days };
+  if (days <= 3) return { label: `Due in ${days}d`, tone: "text-warning", days };
+  return { label: `Due ${formatShortDateIST(d)}`, tone: "text-muted-foreground", days };
+}
+
+function MiniStat({ icon: Icon, label, value, sub, tone = "bg-muted text-muted-foreground", href }) {
+  const body = (
+    <Card className={`h-full ${href ? "transition hover:ring-foreground/20" : ""}`}>
+      <CardContent className="p-3 sm:p-4">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+          <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${tone}`}><Icon className="h-3.5 w-3.5" /></div>
+        </div>
+        <p className="mt-1.5 font-heading text-xl font-semibold tabular-nums text-foreground sm:text-2xl">{value}</p>
+        {sub && <p className="truncate text-[11px] text-muted-foreground">{sub}</p>}
+      </CardContent>
+    </Card>
+  );
+  return href ? <Link href={href}>{body}</Link> : body;
+}
+
+function SectionTitle({ icon: Icon, children, href, linkLabel }) {
+  return (
+    <div className="mb-2 flex items-center justify-between">
+      <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" /> {children}
+      </p>
+      {href && <Link href={href} className="text-xs font-medium text-accent hover:underline">{linkLabel}</Link>}
+    </div>
+  );
+}
+
+function EmployeeHome({ user, projects, events, deliverables, loaded }) {
+  const today = getISTDateStr();
+  const paidLeft = user.leaveBalance?.Paid ?? 0;
+  const tasks = [...deliverables].sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
+  const dueSoon = tasks.filter((t) => {
+    const i = dueInfo(t.deadline, today);
+    return i.days != null && i.days <= 7;
+  }).length;
+  const overdue = tasks.filter((t) => (dueInfo(t.deadline, today).days ?? 1) < 0).length;
+  const nextShoot = events[0];
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* Today */}
+      {/* Equal-height pair: both cards stretch to the taller one. */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <AttendanceCard className="h-full" />
+        <EmployeeReportForm className="h-full" />
+      </div>
+
+      {/* At a glance */}
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-4">
+        <MiniStat icon={CalendarDays} label="Paid leave left" value={paidLeft} sub="of your yearly balance" tone={paidLeft <= 0 ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"} href="/leave" />
+        <MiniStat icon={Camera} label="Next shoot" value={nextShoot ? formatShortDateIST(nextShoot.eventStartDate) : "—"} sub={nextShoot ? nextShoot.projectName : "Nothing scheduled"} href={nextShoot ? `/my-projects/${nextShoot.projectId}` : undefined} />
+        <MiniStat icon={FolderKanban} label="Active projects" value={loaded ? projects.length : "–"} sub={`${events.length} upcoming event${events.length === 1 ? "" : "s"}`} href="/my-projects" />
+        <MiniStat icon={ClipboardList} label="Open tasks" value={tasks.length} sub={overdue ? `${overdue} overdue` : dueSoon ? `${dueSoon} due this week` : "Nothing urgent"} tone={overdue ? "bg-destructive/10 text-destructive" : dueSoon ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground"} href="/post-production" />
+      </div>
+
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        {/* Upcoming shoots */}
+        <div>
+          <SectionTitle icon={Camera} href="/my-projects" linkLabel="All assignments">Upcoming shoots</SectionTitle>
+          {!loaded ? (
+            <div className="h-40 animate-pulse rounded-xl bg-muted/70" />
+          ) : events.length === 0 ? (
+            <Card><CardContent className="p-4 text-sm text-muted-foreground">No upcoming shoots assigned to you.</CardContent></Card>
+          ) : (
+            <Card>
+              <CardContent className="divide-y divide-border p-0">
+                {events.slice(0, 5).map((ev) => {
+                  const start = ev.eventStartDate || "";
+                  const isToday = start === today;
+                  return (
+                    <Link key={`${ev.projectId}-${ev.id}`} href={`/my-projects/${ev.projectId}`} className="flex items-center gap-3 p-3 transition-colors hover:bg-muted/40">
+                      <div className={`flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg text-center leading-none ${isToday ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"}`}>
+                        <span className="text-[10px] font-medium uppercase">{start ? new Date(`${start}T12:00:00+05:30`).toLocaleString("en-IN", { month: "short", timeZone: "Asia/Kolkata" }) : "TBD"}</span>
+                        <span className="text-base font-semibold">{start ? Number(start.slice(8, 10)) : "–"}</span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">{ev.eventName || "Event"}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {ev.projectName}
+                          {ev.shootDays > 1 ? ` · ${ev.shootDays} days` : ""}
+                        </p>
+                      </div>
+                      {isToday && <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">Today</span>}
+                    </Link>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          )}
+          {events.length > 5 && (
+            <Link href="/my-projects" className="mt-2 block text-center text-xs font-medium text-accent hover:underline">
+              +{events.length - 5} more
+            </Link>
+          )}
+        </div>
+
+        {/* Post-production */}
+        <div>
+          <SectionTitle icon={ClipboardList} href="/post-production" linkLabel="Open Post-Production">My post-production tasks</SectionTitle>
+          {tasks.length === 0 ? (
+            <Card><CardContent className="p-4 text-sm text-muted-foreground">You&apos;re not assigned to any open deliverables right now.</CardContent></Card>
+          ) : (
+            <Card>
+              <CardContent className="divide-y divide-border p-0">
+                {tasks.slice(0, 5).map((d) => {
+                  const due = dueInfo(d.deadline, today);
+                  return (
+                    <Link key={d.id} href="/post-production" className="flex items-center justify-between gap-3 p-3 transition-colors hover:bg-muted/40">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${DELIVERABLE_STATUS_DOT[d.status] || "bg-muted-foreground/40"}`} />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">{d.type}</p>
+                          <p className="truncate text-xs text-muted-foreground">{d.projectName}{d.clientName ? ` · ${d.clientName}` : ""}</p>
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className={`text-xs ${due.tone}`}>{due.label}</p>
+                        <p className="text-[11px] text-muted-foreground">{d.status}</p>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          )}
+          {tasks.length > 5 && (
+            <Link href="/post-production" className="mt-2 block text-center text-xs font-medium text-accent hover:underline">
+              +{tasks.length - 5} more
+            </Link>
+          )}
+        </div>
+      </div>
+
+      {/* Project instructions */}
+      {projects.some((p) => p.latestNote) && (
+        <div>
+          <SectionTitle icon={Megaphone}>Latest instructions</SectionTitle>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {projects.filter((p) => p.latestNote).slice(0, 4).map((p) => (
+              <Link key={p.projectId} href={`/my-projects/${p.projectId}`}>
+                <Card className="h-full transition hover:ring-foreground/20">
+                  <CardContent className="p-3">
+                    <p className="truncate text-sm font-medium text-foreground">{p.projectName}</p>
+                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{p.latestNote.text}</p>
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -45,7 +45,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import RichTextEditor from "@/components/quotes/RichTextEditor";
-import { Plus, Trash2, X, CalendarOff, Copy, Lock, ChevronUp, ChevronDown, Eye, Download, Search } from "lucide-react";
+import { Plus, Trash2, X, CalendarOff, Copy, Lock, ChevronUp, ChevronDown, Eye, Download, Search, Building2, Package, FileText, CalendarClock, ClipboardList, Inbox } from "lucide-react";
 import { toast } from "sonner";
 import {
   getOrgQuoteSettings,
@@ -77,66 +77,93 @@ import {
   slugifyFieldKey,
 } from "@/lib/constants/enquiryForm";
 
-const SETTINGS_TABS = ["org", "packages", "contracts", "schedules", "holidays", "enquiryForm", "enquiryResponses"];
+const SECTIONS = [
+  { value: "org", label: "Business & Payment", desc: "Studio name, tagline and the bank details printed on quotes.", icon: Building2 },
+  { value: "packages", label: "Packages", desc: "Reusable packages you can drop into a quote.", icon: Package },
+  { value: "contracts", label: "Contracts", desc: "Terms & conditions templates attached to quotes.", icon: FileText },
+  { value: "schedules", label: "Payment Schedules", desc: "Instalment splits, e.g. 30 / 60 / 10.", icon: CalendarClock },
+  { value: "holidays", label: "Holidays", desc: "Yearly office holidays — not counted as working days.", icon: CalendarOff },
+  { value: "enquiryForm", label: "Enquiry Form", desc: "Questions on your public enquiry page.", icon: ClipboardList },
+  { value: "enquiryResponses", label: "Responses", desc: "Everything submitted through the enquiry form.", icon: Inbox },
+];
+const SETTINGS_TABS = SECTIONS.map((x) => x.value);
+
+const PANELS = {
+  org: OrgSettingsPanel,
+  packages: PackageTemplatesPanel,
+  contracts: ContractTemplatesPanel,
+  schedules: ScheduleTemplatesPanel,
+  holidays: HolidaysPanel,
+  enquiryForm: EnquiryFormPanel,
+  enquiryResponses: EnquiryResponsesPanel,
+};
 
 function SettingsContent() {
   const searchParams = useSearchParams();
-  // Deep link from elsewhere in the app (e.g. Attendance links straight to
-  // Settings > Holidays). Read once on mount — defaultValue on Tabs is
-  // uncontrolled, so this only needs to seed the initial tab, not track
-  // the URL reactively afterward.
-  const initialTab = useMemo(() => {
-    const tab = searchParams.get("tab");
-    return SETTINGS_TABS.includes(tab) ? tab : "org";
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const router = useRouter();
+  // Deep links (e.g. Attendance → Settings › Holidays) seed the section; the
+  // URL is kept in step so refresh / back land on the same section.
+  const [tab, setTab] = useState(() => {
+    const t = searchParams.get("tab");
+    return SETTINGS_TABS.includes(t) ? t : "org";
+  });
+  const current = SECTIONS.find((x) => x.value === tab) || SECTIONS[0];
+  const Panel = PANELS[current.value];
+
+  function choose(value) {
+    setTab(value);
+    router.replace(`/settings?tab=${value}`, { scroll: false });
+  }
+
   return (
     <AppShell>
-      <h2 className="mb-1 font-serif text-2xl font-semibold text-foreground">Settings</h2>
-      <p className="mb-6 text-sm text-muted-foreground">
-        Your studio&rsquo;s quote defaults and reusable templates.
-      </p>
+      <div className="mx-auto w-full max-w-6xl">
+        <div className="mb-5">
+          <h1 className="font-heading text-xl font-semibold text-foreground sm:text-2xl">Settings</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">Your studio&rsquo;s quote defaults, templates, holidays and enquiry form.</p>
+        </div>
 
-      {/* Vertical tab rail. Seven tabs in a horizontal strip either wrapped
-          or scrolled off-screen; down the left they all stay visible and the
-          labels have room to read as full words. Falls back to the original
-          horizontal strip under sm, where a side rail would eat the width. */}
-      <Tabs defaultValue={initialTab} orientation="vertical" className="sm:flex-row sm:gap-6">
-        <TabsList
-          variant="line"
-          className="w-full shrink-0 flex-row overflow-x-auto sm:w-52 sm:flex-col sm:overflow-visible"
-        >
-          <TabsTrigger value="org">Business &amp; Payment</TabsTrigger>
-          <TabsTrigger value="packages">Packages</TabsTrigger>
-          <TabsTrigger value="contracts">Contracts</TabsTrigger>
-          <TabsTrigger value="schedules">Payment Schedules</TabsTrigger>
-          <TabsTrigger value="holidays">Holidays</TabsTrigger>
-          <TabsTrigger value="enquiryForm">Enquiry Form</TabsTrigger>
-          <TabsTrigger value="enquiryResponses">Responses</TabsTrigger>
-        </TabsList>
+        <div className="flex flex-col gap-5 md:grid md:grid-cols-[240px_minmax(0,1fr)] md:items-start">
+          {/* Phone: scrolling pills. Tablet/desktop: a sticky side menu. */}
+          <nav
+            aria-label="Settings sections"
+            className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:sticky md:top-4 md:mx-0 md:flex-col md:gap-0.5 md:overflow-visible md:rounded-xl md:bg-card md:p-2 md:shadow-xs md:ring-1 md:ring-foreground/10 [&::-webkit-scrollbar]:hidden"
+          >
+            {SECTIONS.map((x) => {
+              const active = x.value === current.value;
+              return (
+                <button
+                  key={x.value}
+                  type="button"
+                  onClick={() => choose(x.value)}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex shrink-0 items-center gap-2.5 rounded-full px-3.5 py-1.5 text-left text-sm font-medium transition-colors md:rounded-lg md:px-3 md:py-2 ${
+                    active
+                      ? "bg-primary text-primary-foreground md:bg-muted md:text-foreground"
+                      : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground md:bg-transparent"
+                  }`}
+                >
+                  <x.icon className={`h-4 w-4 shrink-0 ${active ? "md:text-accent" : ""}`} />
+                  <span className="whitespace-nowrap">{x.label}</span>
+                </button>
+              );
+            })}
+          </nav>
 
-        <TabsContent value="org">
-          <OrgSettingsPanel />
-        </TabsContent>
-        <TabsContent value="packages">
-          <PackageTemplatesPanel />
-        </TabsContent>
-        <TabsContent value="contracts">
-          <ContractTemplatesPanel />
-        </TabsContent>
-        <TabsContent value="schedules">
-          <ScheduleTemplatesPanel />
-        </TabsContent>
-        <TabsContent value="holidays">
-          <HolidaysPanel />
-        </TabsContent>
-        <TabsContent value="enquiryForm">
-          <EnquiryFormPanel />
-        </TabsContent>
-        <TabsContent value="enquiryResponses">
-          <EnquiryResponsesPanel />
-        </TabsContent>
-      </Tabs>
+          <section className="min-w-0">
+            <div className="mb-1 flex items-start gap-3">
+              <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground sm:flex">
+                <current.icon className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="font-heading text-lg font-semibold text-foreground">{current.label}</h2>
+                <p className="text-sm text-muted-foreground">{current.desc}</p>
+              </div>
+            </div>
+            <Panel key={current.value} />
+          </section>
+        </div>
+      </div>
     </AppShell>
   );
 }
@@ -185,7 +212,7 @@ function OrgSettingsPanel() {
     }
   }
 
-  if (loading) return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+  if (loading) return <div className="mt-4 h-64 animate-pulse rounded-xl bg-muted/70" />;
 
   return (
     <Card className="mt-4">
@@ -302,7 +329,7 @@ function PackageTemplatesPanel() {
     load();
   }
 
-  if (loading) return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+  if (loading) return <div className="mt-4 h-64 animate-pulse rounded-xl bg-muted/70" />;
 
   if (editing) {
     return (
@@ -351,7 +378,7 @@ function PackageTemplatesPanel() {
                       onClick={() =>
                         setEditing({ ...editing, events: editing.events.filter((_, i) => i !== idx) })
                       }
-                      className="text-red-500 hover:text-red-600"
+                      className="text-destructive hover:text-destructive/80"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -397,7 +424,7 @@ function PackageTemplatesPanel() {
                         deliverables: editing.deliverables.filter((_, i) => i !== idx),
                       })
                     }
-                    className="text-red-500 hover:text-red-600"
+                    className="text-destructive hover:text-destructive/80"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -452,13 +479,13 @@ function PackageTemplatesPanel() {
         </Button>
       </div>
       {templates.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
           No package templates yet.
         </p>
       ) : (
         <div className="grid gap-2">
           {templates.map((t) => (
-            <div key={t.id} className="flex items-center justify-between rounded-md border border-border p-3">
+            <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
               <div>
                 <p className="font-medium text-foreground">{t.name}</p>
                 <p className="text-xs text-muted-foreground">₹{Number(t.unitPrice || 0).toLocaleString("en-IN")}</p>
@@ -482,7 +509,7 @@ function PackageTemplatesPanel() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-red-600 hover:bg-red-700">
+                      <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-destructive text-white hover:bg-destructive/90">
                         Delete
                       </AlertDialogAction>
                     </AlertDialogFooter>
@@ -534,7 +561,7 @@ function ContractTemplatesPanel() {
     load();
   }
 
-  if (loading) return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+  if (loading) return <div className="mt-4 h-64 animate-pulse rounded-xl bg-muted/70" />;
 
   if (editing) {
     return (
@@ -571,13 +598,13 @@ function ContractTemplatesPanel() {
         </Button>
       </div>
       {templates.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
           No contract templates yet.
         </p>
       ) : (
         <div className="grid gap-2">
           {templates.map((t) => (
-            <div key={t.id} className="flex items-center justify-between rounded-md border border-border p-3">
+            <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
               <p className="font-medium text-foreground">{t.name}</p>
               <div className="flex items-center gap-1">
                 <Button size="sm" variant="ghost" onClick={() => setEditing(t)}>
@@ -596,7 +623,7 @@ function ContractTemplatesPanel() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-red-600 hover:bg-red-700">
+                      <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-destructive text-white hover:bg-destructive/90">
                         Delete
                       </AlertDialogAction>
                     </AlertDialogFooter>
@@ -655,7 +682,7 @@ function ScheduleTemplatesPanel() {
     load();
   }
 
-  if (loading) return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+  if (loading) return <div className="mt-4 h-64 animate-pulse rounded-xl bg-muted/70" />;
 
   if (editing) {
     return (
@@ -690,7 +717,7 @@ function ScheduleTemplatesPanel() {
                     onClick={() =>
                       setEditing({ ...editing, splits: editing.splits.filter((_, i) => i !== idx) })
                     }
-                    className="text-red-500 hover:text-red-600"
+                    className="text-destructive hover:text-destructive/80"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -703,7 +730,7 @@ function ScheduleTemplatesPanel() {
               >
                 + Add installment
               </button>
-              <p className={`text-sm ${splitsSum === 100 ? "text-emerald-600" : "text-amber-600"}`}>
+              <p className={`text-sm ${splitsSum === 100 ? "text-success" : "text-warning"}`}>
                 Total {splitsSum}%
               </p>
             </div>
@@ -727,13 +754,13 @@ function ScheduleTemplatesPanel() {
         </Button>
       </div>
       {templates.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
           No payment schedule templates yet.
         </p>
       ) : (
         <div className="grid gap-2">
           {templates.map((t) => (
-            <div key={t.id} className="flex items-center justify-between rounded-md border border-border p-3">
+            <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl bg-card p-3 shadow-xs ring-1 ring-foreground/10">
               <div>
                 <p className="font-medium text-foreground">{t.name}</p>
                 <p className="text-xs text-muted-foreground">{(t.splits || []).join("% + ")}%</p>
@@ -755,7 +782,7 @@ function ScheduleTemplatesPanel() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-red-600 hover:bg-red-700">
+                      <AlertDialogAction onClick={() => handleDelete(t.id)} className="bg-destructive text-white hover:bg-destructive/90">
                         Delete
                       </AlertDialogAction>
                     </AlertDialogFooter>
@@ -821,7 +848,7 @@ function HolidaysPanel() {
     persist(holidays.filter((h) => h.id !== id));
   }
 
-  if (loading) return <p className="mt-4 text-sm text-muted-foreground">Loading...</p>;
+  if (loading) return <div className="mt-4 h-64 animate-pulse rounded-xl bg-muted/70" />;
 
   return (
     <Card className="mt-4">
@@ -1097,7 +1124,7 @@ function EnquiryFormPanel() {
                   <button
                     type="button"
                     onClick={() => removeField(field.id)}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center text-red-500 hover:text-red-600"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center text-destructive hover:text-destructive/80"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

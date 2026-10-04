@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { formatTime12 } from "@/lib/dateIST";
 
-export default function AttendanceCard() {
+export default function AttendanceCard({ className = "" }) {
   const { user } = useAuth();
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -30,7 +30,7 @@ export default function AttendanceCard() {
 
   const isSunday = new Date().getDay() === 0;
 
-  async function loadRecord() {
+  async function loadRecord({ notify = false } = {}) {
     const [data, report] = await Promise.all([
       getTodayAttendance(user.uid),
       getTodayReport(user.uid),
@@ -38,6 +38,9 @@ export default function AttendanceCard() {
     setRecord(data);
     setHasReport(!!report);
     setLoading(false);
+    // Lets other widgets on the page (e.g. "My attendance") refresh after a
+    // check-in / check-out without a page reload.
+    if (notify) window.dispatchEvent(new Event("attendanceChanged"));
   }
 
   useEffect(() => {
@@ -89,7 +92,7 @@ export default function AttendanceCard() {
     try {
       await checkIn(user.uid, user.name, user.department);
       toast.success("Checked in successfully");
-      loadRecord();
+      loadRecord({ notify: true });
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -102,7 +105,7 @@ export default function AttendanceCard() {
     try {
       await checkOut(user.uid);
       toast.success("Checked out successfully");
-      loadRecord();
+      loadRecord({ notify: true });
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -120,7 +123,7 @@ export default function AttendanceCard() {
         await startBreak(user.uid);
         toast.success("Break started");
       }
-      loadRecord();
+      loadRecord({ notify: true });
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -146,33 +149,53 @@ export default function AttendanceCard() {
 
   if (loading) return null;
 
+  const status = !record
+    ? { label: "Not checked in", cls: "bg-muted text-muted-foreground", dot: "bg-muted-foreground/50" }
+    : record.checkOutTime
+      ? { label: "Checked out", cls: "bg-muted text-foreground", dot: "bg-foreground/60" }
+      : isOnBreak
+        ? { label: "On break", cls: "bg-warning/15 text-warning", dot: "bg-warning" }
+        : { label: "Working", cls: "bg-success/10 text-success", dot: "bg-success animate-pulse" };
+
   return (
-    <Card>
+    <Card className={className}>
       <CardContent className="p-5">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs text-slate-500 sm:text-sm">Check In</p>
-            <p className="text-base font-semibold text-slate-900 sm:text-lg">
+            <h3 className="font-heading text-base font-semibold text-foreground">Today</h3>
+            <p className="text-xs text-muted-foreground">
+              {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "Asia/Kolkata" })}
+            </p>
+          </div>
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${status.cls}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+            {status.label}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 rounded-lg bg-muted/40 p-3 sm:grid-cols-4">
+          <div>
+            <p className="text-xs text-muted-foreground sm:text-sm">Check In</p>
+            <p className="text-base font-semibold text-foreground sm:text-lg">
               {formatTime12(record?.checkInTime)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500 sm:text-sm">Check Out</p>
-            <p className="text-base font-semibold text-slate-900 sm:text-lg">
+            <p className="text-xs text-muted-foreground sm:text-sm">Check Out</p>
+            <p className="text-base font-semibold text-foreground sm:text-lg">
               {formatTime12(record?.checkOutTime)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500 sm:text-sm">
-              Break {isOnBreak && <span className="text-amber-600">(ongoing)</span>}
+            <p className="text-xs text-muted-foreground sm:text-sm">
+              Break {isOnBreak && <span className="text-warning">(ongoing)</span>}
             </p>
-            <p className="text-base font-semibold text-slate-900 sm:text-lg">
+            <p className="text-base font-semibold text-foreground sm:text-lg">
               {formatDuration(liveBreakMs)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500 sm:text-sm">Working</p>
-            <p className="text-base font-semibold text-slate-900 sm:text-lg">
+            <p className="text-xs text-muted-foreground sm:text-sm">Working</p>
+            <p className="text-base font-semibold text-foreground sm:text-lg">
               {formatDuration(liveWorkingMs)}
             </p>
           </div>
@@ -193,14 +216,17 @@ export default function AttendanceCard() {
                 Check Out
               </Button>
               {!hasReport && (
-                <p className="w-full text-xs text-amber-600">
+                <p className="w-full text-xs text-warning">
                   Submit today&apos;s Daily Report before you can check out.
                 </p>
+              )}
+              {hasReport && isOnBreak && (
+                <p className="w-full text-xs text-muted-foreground">End your break (Resume) before checking out.</p>
               )}
             </>
           )}
           {record?.checkOutTime && (
-            <p className="text-sm text-slate-500">Attendance completed for today.</p>
+            <p className="text-sm text-muted-foreground">Attendance completed for today.</p>
           )}
           {isSunday && record && (
             <Button

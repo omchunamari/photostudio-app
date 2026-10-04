@@ -341,10 +341,16 @@ function LeadDetailContent() {
           leadName: lead.clientName,
           quotationId: sourceQuote?.id || null,
           clientName: lead.clientName,
-          quotationAmount: sourceQuote?.amount ?? lead.budget ?? 0,
+          // Quotes store their price as `total` (see computeTotals) — reading
+          // `.amount` always fell through to the lead's budget.
+          quotationAmount: sourceQuote?.total ?? sourceQuote?.amount ?? lead.budget ?? 0,
         },
         user.uid
       );
+      // Move the lead to Converted so the pipeline reflects it.
+      if (lead.status !== "Converted") {
+        await updateLeadStatus(id, "Converted").catch(() => {});
+      }
       toast.success("Converted to project");
       router.push(`/projects/${projectId}`);
     } catch (err) {

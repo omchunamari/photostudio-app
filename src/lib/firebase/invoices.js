@@ -11,6 +11,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./client";
+import { getISTDateStr } from "@/lib/dateIST";
 
 /**
  * Invoice doc shape (invoices/{id}):
@@ -51,12 +52,14 @@ export async function createInvoice(data, createdByUid, createdByName) {
     projectId: data.projectId,
     projectName: data.projectName || "",
     invoiceNumber: data.invoiceNumber,
-    date: data.date || now.slice(0, 10),
+    date: data.date || getISTDateStr(),
     // An invoice created already marked paid is assumed collected on its own
     // date unless the user says otherwise; unpaid invoices carry no paidAt.
-    paidAt: (data.status || "unpaid") === "paid" ? data.paidAt || data.date || now.slice(0, 10) : null,
+    paidAt: (data.status || "unpaid") === "paid" ? data.paidAt || data.date || getISTDateStr() : null,
     amount: Number(data.amount) || 0,
     status: data.status || "unpaid",
+    // Finance account the money landed in (optional; can be assigned later in Finance).
+    accountId: data.accountId ?? null,
     note: data.note || "",
     createdBy: createdByUid,
     createdByName: createdByName || "",
@@ -83,16 +86,18 @@ export async function updateInvoice(id, data) {
  * today's date as the collection date; reverting to unpaid clears it, so a
  * mis-click can't leave a stale payment date behind inflating cash-flow.
  */
-export async function setInvoiceStatus(id, status, paidAt) {
+export async function setInvoiceStatus(id, status, paidAt, accountId) {
   await updateDoc(doc(db, "invoices", id), {
     status,
     paidAt: status === "paid" ? paidAt || todayISO() : null,
+    // Paid: record the account it landed in (when given). Unpaid: clear it so the balance reverts.
+    ...(status === "paid" ? (accountId !== undefined ? { accountId: accountId || null } : {}) : { accountId: null }),
     updatedAt: new Date().toISOString(),
   });
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return getISTDateStr();
 }
 
 export async function deleteInvoice(id) {

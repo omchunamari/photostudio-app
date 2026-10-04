@@ -39,8 +39,9 @@ import {
   blankEvent,
   blankInstallment,
 } from "@/lib/constants/quotations";
+import { getISTDateStr } from "@/lib/dateIST";
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = () => getISTDateStr();
 const fmtINR = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
 
 export default function QuoteBuilder({ lead, initialQuotation, currentUserUid }) {

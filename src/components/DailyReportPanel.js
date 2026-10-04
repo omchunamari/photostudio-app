@@ -69,7 +69,9 @@ export default function DailyReportPanel() {
     );
 }
 
-function EmployeeReportForm() {
+// Exported so the Attendance page can show the employee's own report form
+// right under the check-in card (check-out needs today's report).
+export function EmployeeReportForm({ className = "" }) {
     const { user } = useAuth();
     const [loading, setLoading] = useState(true);
     const [existingReport, setExistingReport] = useState(null);
@@ -168,25 +170,25 @@ function EmployeeReportForm() {
     const showOffNotice = offInfo && !existingReport && !submitAnyway;
 
     return (
-        <Card>
+        <Card className={className}>
             <CardContent className="p-4 sm:p-5">
-                <h3 className="mb-1 text-sm font-semibold text-slate-900 sm:text-base">
+                <h3 className="mb-1 text-sm font-semibold text-foreground sm:text-base">
                     Today&apos;s Daily Report
                 </h3>
 
                 {existingReport ? (
                     <>
-                        <p className="mb-2 text-xs text-slate-500">
+                        <p className="mb-2 text-xs text-muted-foreground">
                             Submitted at {formatTime12(existingReport.submittedAt)}
                         </p>
-                        <div className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                        <div className="whitespace-pre-wrap rounded-md border border-border bg-muted/50 p-3 text-sm text-foreground/80">
                             {existingReport.report}
                         </div>
                         <ReportUpdatesSummary report={existingReport} className="mt-3" />
                     </>
                 ) : showOffNotice ? (
                     <div className="flex flex-col gap-2">
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-muted-foreground">
                             {offInfo.type === "holiday"
                                 ? `Today is ${offInfo.label} — a holiday. No daily report is required.`
                                 : "Today is the weekly off (Sunday). No daily report is required."}
@@ -204,7 +206,7 @@ function EmployeeReportForm() {
                 ) : (
                     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
                         <div className="flex flex-col gap-3">
-                            <p className="text-xs text-slate-500">
+                            <p className="text-xs text-muted-foreground">
                                 {offInfo
                                     ? "Summarize what you worked on today."
                                     : "Summarize what you worked on today. You must submit this before you can check out, and skipping it may result in the day being auto-marked as leave."}
@@ -219,8 +221,8 @@ function EmployeeReportForm() {
                         </div>
 
                         {myDeliverables.length > 0 && (
-                            <div className="flex flex-col gap-2 rounded-md border border-slate-200 p-3">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                     Your Assigned Deliverables (optional update)
                                 </p>
                                 <div className="flex flex-col gap-3">
@@ -229,9 +231,9 @@ function EmployeeReportForm() {
                                         return (
                                             <div key={d.id} className="flex flex-col gap-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
                                                 <div className="flex flex-wrap items-center justify-between gap-2">
-                                                    <p className="text-sm font-medium text-slate-900">
+                                                    <p className="text-sm font-medium text-foreground">
                                                         {d.type}
-                                                        {d.projectName && <span className="ml-1 font-normal text-slate-500">— {d.projectName}</span>}
+                                                        {d.projectName && <span className="ml-1 font-normal text-muted-foreground">— {d.projectName}</span>}
                                                     </p>
                                                     <Select
                                                         value={edit.status || d.status}
@@ -278,11 +280,11 @@ function ReportUpdatesSummary({ report, className = "" }) {
     return (
         <div className={`flex flex-col gap-2 text-xs ${className}`}>
             {deliverableUpdates.map((u, i) => (
-                <div key={`d${i}`} className="flex flex-wrap items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5">
-                    <span className="rounded-full bg-slate-200 px-2 py-0.5 font-medium text-slate-700">{u.status}</span>
-                    <span className="font-medium text-slate-700">{u.type}</span>
-                    {u.projectName && <span className="text-slate-500">— {u.projectName}</span>}
-                    {u.note && <span className="text-slate-500">· {u.note}</span>}
+                <div key={`d${i}`} className="flex flex-wrap items-center gap-1.5 rounded-md bg-muted/50 px-2.5 py-1.5">
+                    <span className="rounded-full bg-slate-200 px-2 py-0.5 font-medium text-foreground/80">{u.status}</span>
+                    <span className="font-medium text-foreground/80">{u.type}</span>
+                    {u.projectName && <span className="text-muted-foreground">— {u.projectName}</span>}
+                    {u.note && <span className="text-muted-foreground">· {u.note}</span>}
                 </div>
             ))}
         </div>
@@ -373,31 +375,31 @@ function AdminReportsView() {
             </Card>
 
             {loading ? (
-                <p className="text-sm text-slate-500">Loading...</p>
+                <p className="text-sm text-muted-foreground">Loading...</p>
             ) : (
                 <>
                     <Card>
                         <CardContent className="p-4 sm:p-5">
-                            <h3 className="mb-3 text-sm font-semibold text-slate-900 sm:text-base">
+                            <h3 className="mb-3 text-sm font-semibold text-foreground sm:text-base">
                                 Submitted — {selectedDate} ({reports.length})
                             </h3>
                             {reports.length === 0 ? (
-                                <p className="text-sm text-slate-500">No reports submitted for this date.</p>
+                                <p className="text-sm text-muted-foreground">No reports submitted for this date.</p>
                             ) : (
                                 <div className="flex flex-col gap-3">
                                     {reports.map((r) => (
                                         <button
                                             key={r.employeeUid}
                                             onClick={() => openHistory(r.employeeUid, r.employeeName)}
-                                            className="rounded-md border border-slate-200 p-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                                            className="rounded-md border border-border p-3 text-left transition hover:border-slate-300 hover:bg-muted/50"
                                         >
                                             <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                                                <p className="text-sm font-medium text-slate-900">{r.employeeName}</p>
-                                                <p className="text-xs text-slate-500">
+                                                <p className="text-sm font-medium text-foreground">{r.employeeName}</p>
+                                                <p className="text-xs text-muted-foreground">
                                                     {formatTime12(r.submittedAt)}
                                                 </p>
                                             </div>
-                                            <p className="whitespace-pre-wrap text-sm text-slate-700">{r.report}</p>
+                                            <p className="whitespace-pre-wrap text-sm text-foreground/80">{r.report}</p>
                                             <ReportUpdatesSummary report={r} className="mt-2" />
                                         </button>
                                     ))}
@@ -409,22 +411,22 @@ function AdminReportsView() {
                     <Card>
                         <CardContent className="p-4 sm:p-5">
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                                <h3 className="text-sm font-semibold text-slate-900 sm:text-base">
+                                <h3 className="text-sm font-semibold text-foreground sm:text-base">
                                     {offInfo ? "Not Submitted" : "Not Yet Submitted"} — {selectedDate} ({missing.length})
                                 </h3>
                                 {offInfo && (
-                                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                                    <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
                                         {offInfo.type === "holiday" ? `Holiday · ${offInfo.label}` : offInfo.label}
                                     </span>
                                 )}
                             </div>
                             {offInfo && (
-                                <p className="mb-3 text-xs text-slate-500">
+                                <p className="mb-3 text-xs text-muted-foreground">
                                     Reports aren&apos;t required on this day, so no one below is flagged as missing.
                                 </p>
                             )}
                             {missing.length === 0 ? (
-                                <p className="text-sm text-slate-500">
+                                <p className="text-sm text-muted-foreground">
                                     {offInfo
                                         ? "No one submitted a report for this date."
                                         : "Everyone active submitted a report for this date."}
@@ -437,7 +439,7 @@ function AdminReportsView() {
                                             onClick={() => openHistory(e.uid, e.name)}
                                             className={`rounded-full px-3 py-1 text-xs font-medium ${
                                                 offInfo
-                                                    ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                                    ? "bg-muted text-muted-foreground hover:bg-slate-200"
                                                     : "bg-amber-50 text-amber-700 hover:bg-amber-100"
                                             }`}
                                         >
@@ -457,20 +459,20 @@ function AdminReportsView() {
                         <DialogTitle>{historyEmp?.name} — Report History</DialogTitle>
                     </DialogHeader>
                     {historyLoading ? (
-                        <p className="text-sm text-slate-500">Loading...</p>
+                        <p className="text-sm text-muted-foreground">Loading...</p>
                     ) : history.length === 0 ? (
-                        <p className="text-sm text-slate-500">No reports on record for this employee.</p>
+                        <p className="text-sm text-muted-foreground">No reports on record for this employee.</p>
                     ) : (
                         <div className="flex flex-col gap-3">
                             {history.map((r) => (
-                                <div key={r.date} className="rounded-md border border-slate-200 p-3">
+                                <div key={r.date} className="rounded-md border border-border p-3">
                                     <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                                        <p className="text-sm font-medium text-slate-900">{r.date}</p>
-                                        <p className="text-xs text-slate-500">
+                                        <p className="text-sm font-medium text-foreground">{r.date}</p>
+                                        <p className="text-xs text-muted-foreground">
                                             {formatTime12(r.submittedAt)}
                                         </p>
                                     </div>
-                                    <p className="whitespace-pre-wrap text-sm text-slate-700">{r.report}</p>
+                                    <p className="whitespace-pre-wrap text-sm text-foreground/80">{r.report}</p>
                                     <ReportUpdatesSummary report={r} className="mt-2" />
                                 </div>
                             ))}
