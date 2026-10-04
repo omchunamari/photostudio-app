@@ -387,16 +387,6 @@ export async function settleAllowance(allowance, balance, { mode, accountId, dat
   await batch.commit();
 }
 
-/** Only an allowance with no spends against it can be removed (its cash-out goes with it). */
-export async function deleteAllowance(allowance, txs) {
-  const hasSpends = txs.some((t) => t.allowanceId === allowance.id && t.id !== allowance.givenTxId);
-  if (hasSpends) throw new Error("This allowance already has spends or a settlement logged against it");
-  const batch = writeBatch(db);
-  batch.delete(doc(db, "allowances", allowance.id));
-  if (allowance.givenTxId) batch.delete(doc(db, "financeTransactions", allowance.givenTxId));
-  await batch.commit();
-}
-
 export async function getTransactionsForProject(projectId) {
   const snap = await getDocs(query(collection(db, "financeTransactions"), where("projectId", "==", projectId)));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));

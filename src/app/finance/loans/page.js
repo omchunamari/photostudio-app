@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Plus, Banknote, Landmark, CalendarClock, Building2 } from "lucide-react";
+import { Plus, Banknote, Landmark, CalendarClock, Building2, Pencil, Trash2, Undo2 } from "lucide-react";
 import FinanceShell, { Stat, PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { createLoan, payEmi } from "@/lib/firebase/loans";
+import { updateLoan, deleteLoan, undoEmi } from "@/lib/firebase/financeEdits";
 import { calcEmi, splitEmi, nextEmiDate } from "@/lib/finance/loanCalc";
 import { daysUntil } from "@/lib/finance/payrollCalc";
 import { EMI_REMINDER_DAYS } from "@/lib/finance/constants";
@@ -25,6 +26,7 @@ function Content() {
   const { user } = useAuth();
   const data = useFinanceData();
   const [addOpen, setAddOpen] = useState(false);
+  const [editing, setEditing] = useState(null); // loan being edited, null = adding
   const [form, setForm] = useState(EMPTY);
   const [pay, setPay] = useState(null);
   const [payForm, setPayForm] = useState({ accountId: "", date: getISTDateStr() });
@@ -47,11 +49,59 @@ function Content() {
     });
   }
 
+  function openAdd() {
+    setEditing(null);
+    setForm(EMPTY);
+    setAddOpen(true);
+  }
+
+  function openEdit(l) {
+    const receipt = data.ledger.find((t) => t.loanId === l.id && t.kind === "loan_in");
+    setEditing(l);
+    setForm({
+      name: l.name || "",
+      lender: l.lender || "",
+      amount: String(l.amount ?? ""),
+      interestRate: String(l.interestRate ?? ""),
+      tenureMonths: String(l.tenureMonths || ""),
+      emi: String(l.emi ?? ""),
+      startDate: l.startDate || getISTDateStr(),
+      disbursalAccountId: receipt?.accountId || "",
+      _emiTouched: true,
+    });
+    setAddOpen(true);
+  }
+
+  async function handleDelete(l) {
+    const emiCount = data.ledger.filter((t) => t.loanId === l.id && t.source === "emi").length;
+    const msg = `Delete ${l.name}?${emiCount ? ` Its ${emiCount} paid EMI${emiCount === 1 ? "" : "s"} are removed from the accounts and P&L too.` : ""} This can't be undone.`;
+    if (!window.confirm(msg)) return;
+    try {
+      await deleteLoan(l, data.ledger);
+      toast.success("Loan deleted");
+      data.reload();
+    } catch (err) {
+      toast.error(err.message || "Could not delete loan");
+    }
+  }
+
+  async function handleUndoEmi(l, t) {
+    if (!window.confirm(`Undo the EMI paid on ${formatDateIST(t.date)}? ${inr(t.amount)} goes back to the account and the outstanding rises by ${inr(t.principal)}.`)) return;
+    try {
+      await undoEmi(l, t);
+      toast.success("EMI reversed");
+      data.reload();
+    } catch (err) {
+      toast.error(err.message || "Could not undo EMI");
+    }
+  }
+
   async function handleCreate() {
     setBusy(true);
     try {
-      await createLoan(form, by);
-      toast.success("Loan added");
+      if (editing) await updateLoan(editing, form, data.ledger, by);
+      else await createLoan(form, by);
+      toast.success(editing ? "Loan updated" : "Loan added");
       setAddOpen(false);
       setForm(EMPTY);
       data.reload();
@@ -83,7 +133,7 @@ function Content() {
       title="Loans & EMI"
       description="Company loans. Each EMI reduces the account you pay from and is split into principal and interest — only interest is a cost in P&L."
       actions={
-        <Button size="sm" onClick={() => setAddOpen(true)}>
+        <Button size="sm" onClick={openAdd}>
           <Plus className="h-4 w-4" /> Add loan
         </Button>
       }
@@ -113,9 +163,17 @@ function Content() {
                       <p className="font-medium text-foreground">{l.name}</p>
                       <p className="text-xs text-muted-foreground">{l.lender || "—"} · {l.interestRate}% p.a. · {l.tenureMonths || "—"} months</p>
                     </div>
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${l.status === "closed" ? "bg-success/10 text-success" : "bg-warning/15 text-warning"}`}>
-                      {l.status === "closed" ? "Closed" : "Active"}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className={`rounded px-2 py-0.5 text-xs font-medium ${l.status === "closed" ? "bg-success/10 text-success" : "bg-warning/15 text-warning"}`}>
+                        {l.status === "closed" ? "Closed" : "Active"}
+                      </span>
+                      <Button size="icon-sm" variant="ghost" title="Edit loan" aria-label="Edit loan" onClick={() => openEdit(l)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button size="icon-sm" variant="ghost" title="Delete loan" aria-label="Delete loan" onClick={() => handleDelete(l)}>
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-center">
                     <div className="rounded-md bg-muted/50 p-2"><p className="text-[11px] uppercase text-muted-foreground">Loan</p><p className="font-semibold">{inr(l.amount)}</p></div>
@@ -132,11 +190,16 @@ function Content() {
                     )}
                   </div>
                   {emis.length > 0 && (
-                    <ul className="max-h-24 divide-y divide-border overflow-y-auto text-xs">
+                    <ul className="max-h-28 divide-y divide-border overflow-y-auto text-xs">
                       {emis.map((t) => (
-                        <li key={t.id} className="flex justify-between py-1">
+                        <li key={t.id} className="flex items-center justify-between gap-2 py-1">
                           <span>{formatDateIST(t.date)}</span>
-                          <span>Principal {inr(t.principal)} + Interest {inr(t.interest)}</span>
+                          <span className="flex items-center gap-1">
+                            <span>Principal {inr(t.principal)} + Interest {inr(t.interest)}</span>
+                            <Button size="icon-sm" variant="ghost" title="Undo this EMI" aria-label="Undo this EMI" onClick={() => handleUndoEmi(l, t)}>
+                              <Undo2 className="h-3 w-3 text-destructive" />
+                            </Button>
+                          </span>
                         </li>
                       ))}
                     </ul>
@@ -155,7 +218,7 @@ function Content() {
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-h-[90vh] w-[95vw] max-w-md overflow-y-auto sm:w-full">
-          <DialogHeader><DialogTitle>Add loan</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editing ? `Edit loan — ${editing.name}` : "Add loan"}</DialogTitle></DialogHeader>
           <div className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-3">
               <div><Label>Loan name</Label><Input value={form.name} onChange={(e) => patch({ name: e.target.value })} /></div>
@@ -179,7 +242,12 @@ function Content() {
               <SearchableSelect value={form.disbursalAccountId} onValueChange={(v) => patch({ disbursalAccountId: v })} options={[{ value: "", label: "Don't record receipt" }, ...accountOptions]} placeholder="Don't record receipt" />
               <p className="mt-1 text-xs text-muted-foreground">Raises that account’s balance. Not counted as income.</p>
             </div>
-            <Button onClick={handleCreate} disabled={busy}>{busy ? "Saving..." : "Add loan"}</Button>
+            {editing && (editing.paidCount || 0) > 0 && (
+              <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
+                {editing.paidCount} EMI{editing.paidCount === 1 ? "" : "s"} already paid keep their principal/interest split. Outstanding becomes amount − principal repaid ({inr(editing.totalPrincipalPaid)}).
+              </p>
+            )}
+            <Button onClick={handleCreate} disabled={busy}>{busy ? "Saving..." : editing ? "Save changes" : "Add loan"}</Button>
           </div>
         </DialogContent>
       </Dialog>
