@@ -8,8 +8,10 @@ import TransactionDialog from "@/components/finance/TransactionDialog";
 import CategoryManager from "@/components/finance/CategoryManager";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
-import { deleteTransaction, markPayablePaid, setLegacyAccount } from "@/lib/firebase/finance";
+import { markPayablePaid, setLegacyAccount } from "@/lib/firebase/finance";
 import { deleteExpense } from "@/lib/firebase/expenses";
+import { deleteLedgerEntry, describeDelete } from "@/lib/firebase/financeEdits";
+import EntryEditDialog from "@/components/finance/EntryEditDialog";
 import FreelancerPayouts from "@/components/finance/FreelancerPayouts";
 import { filterTransactions, inr } from "@/lib/finance/calc";
 import { KIND_LABELS } from "@/lib/finance/constants";
@@ -55,6 +57,7 @@ function Content() {
   const [payForm, setPayForm] = useState({ accountId: "", date: "" });
   const [assignTarget, setAssignTarget] = useState(null);
   const [assignAccount, setAssignAccount] = useState("");
+  const [entryEdit, setEntryEdit] = useState(null); // flow-made or project-page row
 
   const accountName = (id) => data.accounts.find((a) => a.id === id)?.name || "—";
   const set = (p) => setFilters((f) => ({ ...f, ...p }));
@@ -86,10 +89,11 @@ function Content() {
   );
 
   async function handleDelete(tx) {
-    if (!window.confirm("Delete this transaction? Balances and P&L will update.")) return;
+    const msg = tx.legacy ? "Delete this project-page expense? Balances and P&L will update." : describeDelete(tx, data);
+    if (!window.confirm(msg)) return;
     try {
       if (tx.legacy) await deleteExpense(tx.id.replace("legacy-exp-", ""));
-      else await deleteTransaction(tx.id);
+      else await deleteLedgerEntry(tx, data);
       toast.success("Transaction deleted");
       data.reload();
     } catch (err) {
@@ -153,11 +157,12 @@ function Content() {
     return t.accountId ? accountName(t.accountId) : "—";
   }
 
-  // Rows made by salary / EMI / allowance flows are edited there. Older
-  // project-page expenses can be deleted here (not edited); their invoices can't.
+  // Manual rows open the full form. Rows made by Payroll / Loans / Allowances
+  // (and older project-page rows) open a smaller editor, and deleting them also
+  // reverses their parent record. Project invoices are deleted on the project page.
   function actionsFor(t) {
-    const locked = t.legacy ? !t.id.startsWith("legacy-exp-") : t.source && t.source !== "manual";
-    const deleteOnly = t.legacy && t.id.startsWith("legacy-exp-");
+    const manual = !t.legacy && (!t.source || t.source === "manual");
+    const canDelete = !t.legacy || t.id.startsWith("legacy-exp-");
     const out = [];
     if (t.status === "pending" && !t.legacy)
       out.push(
@@ -174,13 +179,12 @@ function Content() {
           <CheckCircle2 className="h-3.5 w-3.5 text-success" /> <span className="md:hidden">Mark paid</span>
         </Button>
       );
-    if (!locked && !deleteOnly)
-      out.push(
-        <Button key="edit" variant="ghost" size="sm" aria-label="Edit" onClick={() => setDialog({ open: true, initial: t })}>
-          <Pencil className="h-3.5 w-3.5" /> <span className="md:hidden">Edit</span>
-        </Button>
-      );
-    if (!locked || deleteOnly)
+    out.push(
+      <Button key="edit" variant="ghost" size="sm" aria-label="Edit" onClick={() => (manual ? setDialog({ open: true, initial: t }) : setEntryEdit(t))}>
+        <Pencil className="h-3.5 w-3.5" /> <span className="md:hidden">Edit</span>
+      </Button>
+    );
+    if (canDelete)
       out.push(
         <Button key="del" variant="ghost" size="sm" aria-label="Delete" onClick={() => handleDelete(t)}>
           <Trash2 className="h-3.5 w-3.5 text-destructive" /> <span className="md:hidden">Delete</span>
@@ -360,9 +364,12 @@ function Content() {
         </button>
       )}
       <p className="mt-2 text-xs text-muted-foreground">
-        Salary, EMI, allowance and advance rows are created by their own screens and are edited there. Rows tagged
+        Every row can be edited, and deleted except project invoices (delete those on their project page). Deleting a salary, EMI,
+        allowance or advance row also reverses it on its own screen (the payroll reopens, the loan’s outstanding goes back up, and so on). Rows tagged
         “Project page” come from invoices / expenses entered on a project page; they count in every P&L, and move a Cash/Bank balance once you assign an account.
       </p>
+
+      <EntryEditDialog key={entryEdit?.id || "none"} entry={entryEdit} onClose={() => setEntryEdit(null)} data={data} onSaved={data.reload} />
 
       <TransactionDialog
         open={dialog.open}

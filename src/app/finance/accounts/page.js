@@ -2,11 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Pencil, Landmark, Wallet, PiggyBank, BookOpen } from "lucide-react";
+import { Plus, Pencil, Landmark, Wallet, PiggyBank, BookOpen, Trash2 } from "lucide-react";
 import FinanceShell, { Stat, signTone, PageSkeleton, EmptyState } from "@/components/finance/FinanceShell";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { createAccount, updateAccount, setLegacyAccount } from "@/lib/firebase/finance";
 import { accountLedger } from "@/lib/finance/ledger";
+import { deleteAccount, accountUsage } from "@/lib/firebase/financeEdits";
 import { inr } from "@/lib/finance/calc";
 import { KIND_LABELS } from "@/lib/finance/constants";
 import { formatDateIST } from "@/lib/dateIST";
@@ -85,6 +86,24 @@ function Content() {
       setSaving(false);
     }
   }
+
+  async function remove() {
+    if (!window.confirm(`Delete the account "${editing.name}"? This can't be undone.`)) return;
+    setSaving(true);
+    try {
+      await deleteAccount(editing, data);
+      toast.success("Account deleted");
+      if (selectedId === editing.id) setSelectedId("");
+      setEditing(null);
+      data.reload();
+    } catch (err) {
+      toast.error(err.message || "Could not delete account");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const editingUsage = editing && editing !== "new" ? accountUsage(editing.id, data) : 0;
 
   return (
     <FinanceShell
@@ -355,6 +374,19 @@ function Content() {
               </label>
             )}
             <Button onClick={save} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+            {editing && editing !== "new" && (
+              <div className="border-t border-border pt-3">
+                {editingUsage ? (
+                  <p className="text-xs text-muted-foreground">
+                    {editingUsage} entr{editingUsage === 1 ? "y uses" : "ies use"} this account, so it can’t be deleted — untick Active to hide it, or move those entries to another account first.
+                  </p>
+                ) : (
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={remove} disabled={saving}>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete account
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

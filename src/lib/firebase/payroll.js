@@ -78,6 +78,7 @@ export async function applyIncrement(uid, current, { mode, value, effectiveDate,
     percent: round2((amount / oldSalary) * 100),
     note: note || "",
     by: by?.name || "",
+    prevNextIncrementDate: current?.nextIncrementDate || null, // restored if this increment is undone
   };
   await setDoc(
     doc(db, "employeeFinance", uid),

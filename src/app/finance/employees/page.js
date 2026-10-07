@@ -2,11 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { TrendingUp, IndianRupee, HandCoins, History, BellRing, Users } from "lucide-react";
+import { TrendingUp, IndianRupee, HandCoins, History, BellRing, Users, Pencil, Trash2, Undo2 } from "lucide-react";
 import FinanceShell, { PageSkeleton, EmptyState, Segmented } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
 import { saveSalaryStructure, applyIncrement, createEmployeeAdvance, advanceOutstanding } from "@/lib/firebase/payroll";
+import { updateEmployeeAdvance, deleteEmployeeAdvance, undoLastIncrement, updateIncrementEntry } from "@/lib/firebase/financeEdits";
 import { inr } from "@/lib/finance/calc";
 import { daysUntil } from "@/lib/finance/payrollCalc";
 import { INCREMENT_REMINDER_DAYS } from "@/lib/finance/constants";
@@ -22,7 +23,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 function Content() {
   const { user } = useAuth();
   const data = useFinanceData();
-  const [dlg, setDlg] = useState(null); // { type: "salary"|"increment"|"advance"|"history", emp }
+  const [dlg, setDlg] = useState(null); // { type: "salary"|"increment"|"advance"|"history"|"incrementEdit", emp, advance?, index? }
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [q, setQ] = useState("");
@@ -72,6 +73,29 @@ function Content() {
       setForm({ monthlySalary: f.monthlySalary ?? "", annualPaidLeaves: f.annualPaidLeaves ?? 24, nextIncrementDate: f.nextIncrementDate || "" });
     if (type === "increment") setForm({ mode: "amount", value: "", effectiveDate: getISTDateStr(), note: "", nextIncrementDate: "" });
     if (type === "advance") setForm({ kind: "salary_advance", amount: "", monthlyRecovery: "", accountId: "", date: getISTDateStr(), note: "" });
+  }
+
+  function editAdvance(emp, a) {
+    setDlg({ type: "advance", emp, advance: a });
+    setForm({ kind: a.kind || "salary_advance", amount: String(a.amount ?? ""), monthlyRecovery: String(a.monthlyRecovery ?? ""), accountId: a.accountId || "", date: a.date || getISTDateStr(), note: a.note || "" });
+  }
+
+  function removeAdvance(a) {
+    if (!window.confirm(`Delete this ${a.kind === "loan" ? "staff loan" : "salary advance"} of ${inr(a.amount)}? Its cash-out entry is removed and the money goes back to the account.`)) return;
+    run(() => deleteEmployeeAdvance(a, data.payrolls), "Advance deleted");
+  }
+
+  function undoIncrement(emp) {
+    const last = (data.employeeFinance[emp.uid]?.increments || []).at(-1);
+    if (!last) return;
+    if (!window.confirm(`Undo the ${formatDateIST(last.date)} increment? Salary goes back to ${inr(last.oldSalary)}. Payroll already processed keeps its figures.`)) return;
+    run(() => undoLastIncrement(emp.uid, data.employeeFinance[emp.uid]), "Increment undone");
+  }
+
+  function editIncrement(emp, index) {
+    const i = data.employeeFinance[emp.uid].increments[index];
+    setDlg({ type: "incrementEdit", emp, index });
+    setForm({ date: i.date || "", note: i.note || "" });
   }
 
   async function run(fn, okMsg) {
@@ -285,7 +309,7 @@ function Content() {
           )}
           {dlg?.type === "advance" && (
             <>
-              <DialogHeader><DialogTitle>Advance / loan — {dlg.emp.name}</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle>{dlg.advance ? "Edit advance / loan" : "Advance / loan"} — {dlg.emp.name}</DialogTitle></DialogHeader>
               <div className="flex flex-col gap-3">
                 <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
                   {[{ v: "salary_advance", l: "Salary advance" }, { v: "loan", l: "Staff loan" }].map((o) => (
@@ -313,7 +337,31 @@ function Content() {
                   </div>
                 </div>
                 <Input placeholder="Note (optional)" value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
-                <Button disabled={saving} onClick={() => run(() => createEmployeeAdvance({ ...form, employeeUid: dlg.emp.uid, employeeName: dlg.emp.name }, by), "Advance recorded — account balance updated")}>Give advance</Button>
+                {dlg.advance && (Number(dlg.advance.recovered) || 0) > 0 && (
+                  <p className="text-xs text-muted-foreground">{inr(dlg.advance.recovered)} already recovered through salary — the amount can’t go below that.</p>
+                )}
+                {dlg.advance ? (
+                  <Button disabled={saving} onClick={() => run(() => updateEmployeeAdvance(dlg.advance, form), "Advance updated — account balance updated")}>Save changes</Button>
+                ) : (
+                  <Button disabled={saving} onClick={() => run(() => createEmployeeAdvance({ ...form, employeeUid: dlg.emp.uid, employeeName: dlg.emp.name }, by), "Advance recorded — account balance updated")}>Give advance</Button>
+                )}
+              </div>
+            </>
+          )}
+          {dlg?.type === "incrementEdit" && (
+            <>
+              <DialogHeader><DialogTitle>Edit increment — {dlg.emp.name}</DialogTitle></DialogHeader>
+              <div className="flex flex-col gap-3">
+                <div>
+                  <Label>Effective date</Label>
+                  <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+                </div>
+                <div>
+                  <Label>Note</Label>
+                  <Input value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
+                </div>
+                <p className="text-xs text-muted-foreground">To change the amount, undo the latest increment and apply it again.</p>
+                <Button disabled={saving} onClick={() => run(() => updateIncrementEntry(dlg.emp.uid, data.employeeFinance[dlg.emp.uid], dlg.index, form), "Increment updated")}>Save changes</Button>
               </div>
             </>
           )}
@@ -327,12 +375,27 @@ function Content() {
                     <p className="text-muted-foreground">None recorded.</p>
                   ) : (
                     <ul className="divide-y divide-border">
-                      {[...data.employeeFinance[dlg.emp.uid].increments].reverse().map((i, idx) => (
-                        <li key={idx} className="py-1.5">
-                          {formatDateIST(i.date)} · {inr(i.oldSalary)} → <b>{inr(i.newSalary)}</b> (+{inr(i.amount)}, {i.percent}%)
-                          {i.note && <span className="text-muted-foreground"> — {i.note}</span>}
-                        </li>
-                      ))}
+                      {data.employeeFinance[dlg.emp.uid].increments
+                        .map((i, index) => ({ i, index }))
+                        .reverse()
+                        .map(({ i, index }, pos) => (
+                          <li key={index} className="flex items-start justify-between gap-2 py-1.5">
+                            <span>
+                              {formatDateIST(i.date)} · {inr(i.oldSalary)} → <b>{inr(i.newSalary)}</b> (+{inr(i.amount)}, {i.percent}%)
+                              {i.note && <span className="text-muted-foreground"> — {i.note}</span>}
+                            </span>
+                            <span className="flex shrink-0 items-center">
+                              <Button size="icon-sm" variant="ghost" title="Edit date / note" aria-label="Edit increment" onClick={() => editIncrement(dlg.emp, index)}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              {pos === 0 && (
+                                <Button size="icon-sm" variant="ghost" title="Undo this increment" aria-label="Undo increment" disabled={saving} onClick={() => undoIncrement(dlg.emp)}>
+                                  <Undo2 className="h-3.5 w-3.5 text-destructive" />
+                                </Button>
+                              )}
+                            </span>
+                          </li>
+                        ))}
                     </ul>
                   )}
                 </div>
@@ -343,8 +406,19 @@ function Content() {
                   ) : (
                     <ul className="divide-y divide-border">
                       {data.advances.filter((a) => a.employeeUid === dlg.emp.uid).map((a) => (
-                        <li key={a.id} className="py-1.5">
-                          {formatDateIST(a.date)} · {a.kind === "loan" ? "Loan" : "Advance"} {inr(a.amount)} · recovered {inr(a.recovered)} · <b>{inr(advanceOutstanding(a))} due</b>
+                        <li key={a.id} className="flex items-start justify-between gap-2 py-1.5">
+                          <span>
+                            {formatDateIST(a.date)} · {a.kind === "loan" ? "Loan" : "Advance"} {inr(a.amount)} · recovered {inr(a.recovered)} · <b>{inr(advanceOutstanding(a))} due</b>
+                            {a.note && <span className="text-muted-foreground"> — {a.note}</span>}
+                          </span>
+                          <span className="flex shrink-0 items-center">
+                            <Button size="icon-sm" variant="ghost" title="Edit" aria-label="Edit advance" onClick={() => editAdvance(dlg.emp, a)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="icon-sm" variant="ghost" title={(Number(a.recovered) || 0) > 0 ? "Already partly recovered through salary" : "Delete"} aria-label="Delete advance" disabled={saving || (Number(a.recovered) || 0) > 0} onClick={() => removeAdvance(a)}>
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                            </Button>
+                          </span>
                         </li>
                       ))}
                     </ul>

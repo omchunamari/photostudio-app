@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Calculator, Download, Wallet, Undo2, SlidersHorizontal, Banknote, CheckCircle2, Clock } from "lucide-react";
+import { Calculator, Download, Wallet, Undo2, SlidersHorizontal, Banknote, CheckCircle2, Clock, Trash2 } from "lucide-react";
 import FinanceShell, { Stat, PageSkeleton, EmptyState, Segmented } from "@/components/finance/FinanceShell";
 import { useAuth } from "@/contexts/AuthContext";
 import useFinanceData from "@/lib/finance/useFinanceData";
@@ -15,6 +15,7 @@ import {
   advanceOutstanding,
   payrollId,
 } from "@/lib/firebase/payroll";
+import { deletePayroll } from "@/lib/firebase/financeEdits";
 import { computeLeaveAndLop, computePayslip, leaveDateSet, monthLabel } from "@/lib/finance/payrollCalc";
 import { downloadPayslipPdf } from "@/lib/finance/payslipPdf";
 import { DEFAULT_ANNUAL_PAID_LEAVES } from "@/lib/finance/constants";
@@ -217,6 +218,22 @@ function Content() {
     }
   }
 
+  async function discard(r) {
+    if (!window.confirm(`Discard ${r.emp.name}'s processed ${monthLabel(month)} salary? Nothing has been paid; the month is simply recalculated from Leave and Attendance.`)) return;
+    try {
+      await deletePayroll(r.payroll);
+      setAdjust((a) => {
+        const next = { ...a };
+        delete next[r.emp.uid];
+        return next;
+      });
+      toast.success("Processed salary discarded");
+      data.reload();
+    } catch (err) {
+      toast.error(err.message || "Could not discard");
+    }
+  }
+
   const allTotal = payTarget === "ALL" ? payable.filter((r) => r.saved).reduce((s, r) => s + r.payroll.netSalary, 0) : payTarget?.payroll?.netSalary || 0;
 
   return (
@@ -316,6 +333,11 @@ function Content() {
                             <SlidersHorizontal className="h-3.5 w-3.5" /> Adjust
                           </Button>
                         )}
+                        {r.saved && (
+                          <Button size="sm" variant="ghost" onClick={() => discard(r)}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" /> Discard
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           onClick={() => {
@@ -396,6 +418,11 @@ function Content() {
                           {!r.locked && !r.former && (
                             <Button size="icon-sm" variant="ghost" title="Adjust" onClick={() => setAdjTarget(r)}>
                               <SlidersHorizontal className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          {!r.locked && r.saved && (
+                            <Button size="icon-sm" variant="ghost" title="Discard processed salary" aria-label="Discard processed salary" onClick={() => discard(r)}>
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
                             </Button>
                           )}
                           {!r.locked && (
